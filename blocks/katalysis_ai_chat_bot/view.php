@@ -896,6 +896,9 @@ function sendToAI(chatbotId, message) {
                 logCompleteConversationToDatabase(chatbotId);
             }, 500);
             
+            // Start automatic notification timer for chat silence
+            startAutoNotificationTimer(chatbotId, 'silence');
+            
         }
     })
     .catch(error => {
@@ -1560,6 +1563,9 @@ function submitSimpleForm(chatbotId) {
                 config.isFormActive = false;
             }
             
+            // Start automatic notification timer for form submission
+            startAutoNotificationTimer(chatbotId, 'form');
+            
             // Hide the specific form that was submitted with a brief success message
             const chatContainer = document.getElementById(`${chatbotId}-messages`);
             if (chatContainer) {
@@ -2217,6 +2223,112 @@ function handleChatButtonClick(chatbotId) {
         }
     }
 }
+
+// Auto notification system
+window.autoNotificationTimers = window.autoNotificationTimers || {};
+
+function startAutoNotificationTimer(chatbotId, notificationType) {
+    console.log(`[AUTO NOTIFY] startAutoNotificationTimer called - chatbotId: ${chatbotId}, type: ${notificationType}`);
+    
+    const config = window.chatbotConfigs[chatbotId];
+    console.log(`[AUTO NOTIFY] config:`, config);
+    
+    // Don't start timer if no chat ID exists
+    if (!config.existingChatId) {
+        console.log(`[AUTO NOTIFY] No existing chat ID found. Chat ID: ${config.existingChatId}`);
+        return;
+    }
+    
+    // Clear any existing timer for this chatbot
+    clearAutoNotificationTimer(chatbotId);
+    
+    // Get timeout duration based on notification type
+    let timeoutMinutes;
+    if (notificationType === 'form') {
+        timeoutMinutes = <?php echo \Config::get('katalysis.aichatbot.form_silence_minutes', 1); ?>;
+    } else {
+        timeoutMinutes = <?php echo \Config::get('katalysis.aichatbot.chat_silence_minutes', 3); ?>;
+    }
+    
+    console.log(`[AUTO NOTIFY] Timeout minutes configured: ${timeoutMinutes} for type: ${notificationType}`);
+    
+    // Check if auto notifications are enabled
+    const autoNotificationsEnabled = <?php echo \Config::get('katalysis.aichatbot.enable_auto_notifications', false) ? 'true' : 'false'; ?>;
+    console.log(`[AUTO NOTIFY] Auto notifications enabled: ${autoNotificationsEnabled}`);
+    
+    if (!autoNotificationsEnabled) {
+        console.log(`[AUTO NOTIFY] Auto notifications are disabled, exiting`);
+        return;
+    }
+    
+    // Convert minutes to milliseconds
+    const timeoutMs = timeoutMinutes * 60 * 1000;
+    
+    console.log(`[AUTO NOTIFY] Starting auto notification timer for ${chatbotId}: ${timeoutMinutes} minutes (${timeoutMs}ms)`);
+    console.log(`[AUTO NOTIFY] Chat ID: ${config.existingChatId}`);
+    
+    // Set timer
+    window.autoNotificationTimers[chatbotId] = setTimeout(() => {
+        console.log(`[AUTO NOTIFY] Timer expired for ${chatbotId}, calling sendAutoNotification with type: ${notificationType}`);
+        console.log(`[AUTO NOTIFY] Attempting to send notification for chat ID: ${config.existingChatId}`);
+        sendAutoNotification(chatbotId, notificationType);
+    }, timeoutMs);
+    
+    console.log(`[AUTO NOTIFY] Timer set successfully. Active timers:`, Object.keys(window.autoNotificationTimers));
+}
+
+function clearAutoNotificationTimer(chatbotId) {
+    if (window.autoNotificationTimers[chatbotId]) {
+        clearTimeout(window.autoNotificationTimers[chatbotId]);
+        delete window.autoNotificationTimers[chatbotId];
+        console.log(`Cleared auto notification timer for ${chatbotId}`);
+    }
+}
+
+function sendAutoNotification(chatbotId, notificationType) {
+    const config = window.chatbotConfigs[chatbotId];
+    
+    if (!config.existingChatId) {
+        console.log('No chat ID available for auto notification');
+        return;
+    }
+    
+    console.log(`Sending auto notification for chat ${config.existingChatId}, type: ${notificationType}`);
+    
+    // Use same approach as working manual email
+    $.ajax({
+        url: '<?php echo \Concrete\Core\Support\Facade\Url::to('/dashboard/katalysis_pro_ai/chat_bot_settings/send_auto_notification'); ?>',
+        type: 'POST',
+        data: {
+            chat_id: config.existingChatId,
+            notification_type: notificationType,
+            ccm_token: '<?php echo \Concrete\Core\Support\Facade\Application::getFacadeApplication()->make('token')->generate('send_chat_email'); ?>'
+        },
+        dataType: 'json'
+    })
+        .done(function(data) {
+            if (data.success) {
+                console.log('Auto notification sent successfully:', data.message);
+            } else {
+                console.log('Auto notification failed:', data.message);
+            }
+        })
+        .fail(function(xhr, status, error) {
+            console.error('Auto notification error:', error);
+            console.error('Response:', xhr.responseText);
+        });
+}
+
+// Clear auto notification timer when user sends a new message
+const originalSendChatMessage = sendChatMessage;
+sendChatMessage = function(chatbotId) {
+    // Clear any existing timer when user sends a message
+    clearAutoNotificationTimer(chatbotId);
+    
+    // Call original function
+    return originalSendChatMessage(chatbotId);
+};
+
 </script>
 
 <style>

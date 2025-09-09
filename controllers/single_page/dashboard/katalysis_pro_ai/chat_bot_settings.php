@@ -61,6 +61,11 @@ class ChatBotSettings extends DashboardPageController
         $this->set('email_from_email', $config->get('katalysis.aichatbot.sender_from_email', ''));
         $this->set('email_from_name', $config->get('katalysis.aichatbot.sender_from_name', ''));
         $this->set('recipient_emails', $config->get('katalysis.aichatbot.recipient_emails', ''));
+        
+        // Automatic notification settings
+        $this->set('enable_auto_notifications', $config->get('katalysis.aichatbot.enable_auto_notifications', false));
+        $this->set('chat_silence_minutes', $config->get('katalysis.aichatbot.chat_silence_minutes', 3));
+        $this->set('form_silence_minutes', $config->get('katalysis.aichatbot.form_silence_minutes', 1));
 
         // Debug: Test actions if debug mode is enabled
         $debugActions = [];
@@ -126,6 +131,11 @@ class ChatBotSettings extends DashboardPageController
             $config->save('katalysis.aichatbot.sender_from_name', (string) $this->post('sender_from_name'));
             $config->save('katalysis.aichatbot.recipient_emails', (string) $this->post('recipient_emails'));
             
+            // Save automatic notification settings
+            $config->save('katalysis.aichatbot.enable_auto_notifications', (bool) $this->post('enable_auto_notifications'));
+            $config->save('katalysis.aichatbot.chat_silence_minutes', (int) $this->post('chat_silence_minutes') ?: 3);
+            $config->save('katalysis.aichatbot.form_silence_minutes', (int) $this->post('form_silence_minutes') ?: 1);
+            
             $this->flash('success', t('Chat bot settings have been updated.'));
         }
         return $this->buildRedirect($this->action());
@@ -178,9 +188,8 @@ class ChatBotSettings extends DashboardPageController
                 ]);
             }
 
-            // Parse recipient emails (support comma-separated list)
-            $recipients = array_map('trim', explode(',', $recipientEmails));
-            $recipients = array_filter($recipients); // Remove empty values
+            // Parse recipient emails (support both comma and newline separation)
+            $recipients = array_filter(array_map('trim', preg_split('/[,\n\r]+/', $recipientEmails)));
 
             if (empty($recipients)) {
                 return $response->setData([
@@ -194,6 +203,8 @@ class ChatBotSettings extends DashboardPageController
 
             // Send email using Concrete CMS mail system
             $emailsSent = 0;
+            $errors = [];
+            
             foreach ($recipients as $recipient) {
                 if (filter_var($recipient, FILTER_VALIDATE_EMAIL)) {
                     try {
@@ -213,14 +224,19 @@ class ChatBotSettings extends DashboardPageController
                         
                         if ($mailService->sendMail()) {
                             $emailsSent++;
+                        } else {
+                            $errors[] = $recipient . ': Failed to send email';
                         }
                         
                         // Clean up for next iteration
                         $mailService->reset();
+                        
                     } catch (\Exception $e) {
-                        // Log individual send failures but continue trying other recipients
+                        $errors[] = $recipient . ': ' . $e->getMessage();
                         error_log('Failed to send email to ' . $recipient . ': ' . $e->getMessage());
                     }
+                } else {
+                    $errors[] = $recipient . ': Invalid email address';
                 }
             }
 
@@ -230,19 +246,26 @@ class ChatBotSettings extends DashboardPageController
                     'message' => t('Email sent successfully to %s recipient(s)', $emailsSent)
                 ]);
             } else {
+                $errorMessage = 'Failed to send email to any recipients';
+                if (!empty($errors)) {
+                    $errorMessage .= '. Errors: ' . implode('; ', array_slice($errors, 0, 3));
+                }
+                
                 return $response->setData([
                     'success' => false,
-                    'message' => t('Failed to send email to any recipients')
+                    'message' => t($errorMessage)
                 ]);
             }
 
         } catch (\Exception $e) {
+            error_log('Manual email send failed: ' . $e->getMessage());
             return $response->setData([
                 'success' => false,
                 'message' => t('Error: %s', $e->getMessage())
             ]);
         }
     }
+
 
     /**
      * Format chat content for email template (similar to view page formatting)
@@ -899,7 +922,6 @@ Available documents (with titles and URLs):
                     if ($immediateFormAction) {
                         error_log('IMMEDIATE FORM PROCESSING - About to start form processing...');
                         error_log('IMMEDIATE FORM DETECTED - Action: ' . $immediateFormAction['name'] . ' (ID: ' . $immediateFormAction['id'] . ')');
-                        error_log('IMMEDIATE FORM - Form config: ' . json_encode($immediateFormAction['formConfig']));
                         error_log('IMMEDIATE FORM - Form steps: ' . json_encode($immediateFormAction['formSteps']));
                         
                         // Start the form immediately
@@ -1183,7 +1205,6 @@ Available documents (with titles and URLs):
                     if ($immediateFormAction) {
                         error_log('IMMEDIATE FORM PROCESSING - About to start form processing...');
                         error_log('IMMEDIATE FORM DETECTED - Action: ' . $immediateFormAction['name'] . ' (ID: ' . $immediateFormAction['id'] . ')');
-                        error_log('IMMEDIATE FORM - Form config: ' . json_encode($immediateFormAction['formConfig']));
                         error_log('IMMEDIATE FORM - Form steps: ' . json_encode($immediateFormAction['formSteps']));
                         
                         // Start the form immediately
@@ -2473,6 +2494,141 @@ Available documents (with titles and URLs):
         } catch (\Exception $e) {
             \Log::addError('Get action info failed: ' . $e->getMessage());
             return new JsonResponse(['error' => 'Failed to get action info'], 500);
+        }
+    }
+
+    /**
+     * Send automatic chat notification email via AJAX
+     */
+    public function send_auto_notification()
+    {
+        $response = new JsonResponse();
+        
+        // Use same token validation as working email function
+        if (!$this->token->validate('send_chat_email')) {
+            return $response->setData([
+                'success' => false,
+                'message' => $this->token->getErrorMessage()
+            ]);
+        }
+
+        $chatId = (int) $this->post('chat_id');
+        $notificationType = $this->post('notification_type'); // 'silence' or 'form'
+        
+        if (!$chatId) {
+            return $response->setData([
+                'success' => false,
+                'message' => t('Chat ID is required')
+            ]);
+        }
+
+        try {
+            // Check if auto notifications are enabled
+            $config = $this->app->make('config');
+            if (!$config->get('katalysis.aichatbot.enable_auto_notifications', false)) {
+                return $response->setData([
+                    'success' => false,
+                    'message' => t('Automatic notifications are disabled')
+                ]);
+            }
+
+            // Get the chat entity
+            $em = $this->app->make('Doctrine\ORM\EntityManager');
+            $chat = $em->getRepository('KatalysisProAi:Chat')->find($chatId);
+            
+            if (!$chat) {
+                return $response->setData([
+                    'success' => false,
+                    'message' => t('Chat not found')
+                ]);
+            }
+
+            // Get email configuration
+            $senderEmail = $config->get('katalysis.aichatbot.sender_from_email');
+            $senderName = $config->get('katalysis.aichatbot.sender_from_name') ?: 'AI Chat Bot';
+            $recipientEmails = $config->get('katalysis.aichatbot.recipient_emails');
+
+            if (empty($senderEmail) || empty($recipientEmails)) {
+                return $response->setData([
+                    'success' => false,
+                    'message' => t('Email configuration is incomplete')
+                ]);
+            }
+
+            // Parse recipient emails (support both newline and comma separation)
+            $recipients = array_filter(array_map('trim', preg_split('/[,\n\r]+/', $recipientEmails)));
+            
+            if (empty($recipients)) {
+                return $response->setData([
+                    'success' => false,
+                    'message' => t('No valid recipient email addresses found')
+                ]);
+            }
+
+            // Format chat content for email
+            $chatContent = $this->formatChatContentForEmail($chat);
+
+            // Send email using Concrete CMS mail system
+            $emailsSent = 0;
+            $errors = [];
+            
+            foreach ($recipients as $recipient) {
+                if (filter_var($recipient, FILTER_VALIDATE_EMAIL)) {
+                    try {
+                        $mailHelper = \Loader::helper('mail');
+                        $mailHelper->from($senderEmail, $senderName);
+                        $mailHelper->to($recipient);
+                        $mailHelper->setSubject(t('Automatic Chat Notification - Chat #%s', $chat->getId()));
+                        
+                        // Add template parameters
+                        $mailHelper->addParameter('chat', $chat);
+                        $mailHelper->addParameter('chatContent', $chatContent);
+                        $mailHelper->addParameter('chatUrl', $this->app->make('url/resolver/path')->resolve(['/dashboard/katalysis_pro_ai/chats/view_chat', $chat->getId()]));
+                        $mailHelper->addParameter('notificationType', $notificationType);
+                        
+                        // Load template from the package
+                        $mailHelper->load('chat_notification', 'katalysis_pro_ai');
+                        
+                        if ($mailHelper->sendMail()) {
+                            $emailsSent++;
+                        } else {
+                            $errors[] = $recipient . ': Failed to send email';
+                        }
+                        
+                        $mailHelper->reset();
+                        
+                    } catch (\Exception $e) {
+                        $errors[] = $recipient . ': ' . $e->getMessage();
+                        error_log('Auto notification email failed for ' . $recipient . ': ' . $e->getMessage());
+                    }
+                } else {
+                    $errors[] = $recipient . ': Invalid email address';
+                }
+            }
+
+            if ($emailsSent > 0) {
+                return $response->setData([
+                    'success' => true,
+                    'message' => t('Automatic notification sent to %s recipient(s)', $emailsSent)
+                ]);
+            } else {
+                $errorMessage = 'Failed to send automatic notification';
+                if (!empty($errors)) {
+                    $errorMessage .= '. Errors: ' . implode('; ', array_slice($errors, 0, 3));
+                }
+                
+                return $response->setData([
+                    'success' => false,
+                    'message' => t($errorMessage)
+                ]);
+            }
+
+        } catch (\Exception $e) {
+            error_log('Auto notification failed: ' . $e->getMessage());
+            return $response->setData([
+                'success' => false,
+                'message' => t('Auto notification failed: %s', $e->getMessage())
+            ]);
         }
     }
 }
