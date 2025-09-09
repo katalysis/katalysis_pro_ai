@@ -1,0 +1,39 @@
+<?xml version="1.0"?>
+<concrete5-cif version="1.0">
+	<permissionkeys>
+		<permissionkey handle="create_katalysis_chats_entries" name="Create Katalysis Chats Entries" description="" package="katalysis_pro_ai" category="admin">
+			<access>
+				<group name="Administrators" description="" />
+			</access>
+		</permissionkey>
+		<permissionkey handle="read_katalysis_chats" name="Read Katalysis Chats" description="" package="katalysis_pro_ai" category="admin">
+		</permissionkey>
+		<permissionkey handle="update_katalysis_chats" name="Update Katalysis Chats" description="" package="katalysis_pro_ai" category="admin">
+			<access>
+				<group name="Administrators" description="" />
+			</access>
+		</permissionkey>
+		<permissionkey handle="delete_katalysis_chats" name="Delete Katalysis Chats" description="" package="katalysis_pro_ai" category="admin">
+			<access>
+				<group name="Administrators" description="" />
+			</access>
+		</permissionkey>
+		<permissionkey handle="create_katalysis_actions_entries" name="Create Katalysis Actions Entries" description="" package="katalysis_pro_ai" category="admin">
+			<access>
+				<group name="Administrators" description="" />
+			</access>
+		</permissionkey>
+		<permissionkey handle="read_katalysis_actions" name="Read Katalysis Actions" description="" package="katalysis_pro_ai" category="admin">	
+		</permissionkey>
+		<permissionkey handle="update_katalysis_actions" name="Update Katalysis Actions" description="" package="katalysis_pro_ai" category="admin">
+			<access>
+				<group name="Administrators" description="" />
+			</access>
+		</permissionkey>
+		<permissionkey handle="delete_katalysis_actions" name="Delete Katalysis Actions" description="" package="katalysis_pro_ai" category="admin">	
+			<access>
+				<group name="Administrators" description="" />
+			</access>
+		</permissionkey>
+	</permissionkeys>
+</concrete5-cif>

@@ -1,0 +1,7 @@
+
+{
+    "name": "katalysis/katalysis_pro_ai",
+    "type": "concrete5-package",
+    "require": {
+    }
+}

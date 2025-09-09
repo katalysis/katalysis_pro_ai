@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<schema version="0.3">
+    <table name="btKatalysisAiChatBot">
+        <field name="bID" type="I">
+            <key/>
+            <unsigned/>
+        </field>
+        <field name="primaryColor" type="C" size="20"/>
+        <field name="primaryDarkColor" type="C" size="20"/>
+        <field name="secondaryColor" type="C" size="20"/>
+        <field name="successColor" type="C" size="20"/>
+        <field name="lightColor" type="C" size="20"/>
+        <field name="darkColor" type="C" size="20"/>
+        <field name="borderColor" type="C" size="20"/>
+        <field name="shadowColor" type="C" size="50"/>
+        <field name="hoverBgColor" type="C" size="50"/>
+    </table>
+</schema>

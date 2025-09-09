@@ -1,0 +1,16 @@
+{
+    "name": "katalysis/ai-chatbot-block",
+    "description": "AI-powered chatbot block for Concrete CMS",
+    "type": "concrete5-block",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Katalysis",
+            "email": "info@katalysis.net"
+        }
+    ],
+    "minimum-stability": "stable",
+    "require": {
+        "concrete5/core": "^9.0"
+    }
+} 
