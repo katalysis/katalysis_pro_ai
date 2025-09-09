@@ -257,18 +257,68 @@ $ps = $app->make('helper/form/page_selector');
             <div class="col-12 col-md-8 col-lg-5" style="max-width:500px;">
 
                 <fieldset class="mb-5">
-                    <legend>Default Notifications</legend>
+                    <legend>Email Notifications</legend>
+                    
+                    <h6 class="mb-3">Email Settings</h6>
                     <div class="form-group">
-                        <label class="form-label" for="email_from_email">Sender Email</label>
-                        <?php echo $form->email("sender_from_email", $email_from_email,["class" => "form-control"]); ?>
+                        <label class="form-label" for="sender_from_email">Sender Email</label>
+                        <?php echo $form->email("sender_from_email", $email_from_email, ["class" => "form-control"]); ?>
                     </div>
                     <div class="form-group">
-                        <label class="form-label" for="email_from_name">Sender Name</label>
-                        <?php echo $form->text("sender_from_name", $email_from_name,["class" => "form-control"]); ?>
+                        <label class="form-label" for="sender_from_name">Sender Name</label>
+                        <?php echo $form->text("sender_from_name", $email_from_name, ["class" => "form-control"]); ?>
                     </div>
                     <div class="form-group">
-                        <label class="form-label" for="email_from_name">Recipients</label>
-                        <?php echo $form->textarea("recipient_emails", $recipient_emails,["class" => "form-control"]); ?>
+                        <label class="form-label" for="recipient_emails">Recipients</label>
+                        <?php echo $form->textarea("recipient_emails", $recipient_emails, ["class" => "form-control", "rows" => "2", "placeholder" => "Enter email addresses, one per line"]); ?>
+                    </div>
+                    
+                    <hr class="my-4">
+                    <h6 class="mb-3">Automatic Notifications</h6>
+                    
+                    <div class="form-group">
+                        <div class="form-check">
+                            <?php echo $form->checkbox('enable_auto_notifications', 1, $enable_auto_notifications ?? false, ['class' => 'form-check-input', 'id' => 'enable_auto_notifications']); ?>
+                            <?php echo $form->label('enable_auto_notifications', t('Enable automatic email notifications'), ['class' => 'form-check-label']); ?>
+                        </div>
+                        <small class="text-muted">When enabled, emails will be sent automatically after periods of chat inactivity</small>
+                    </div>
+                    
+                    <div id="auto_notification_settings" style="<?php echo ($enable_auto_notifications ?? false) ? '' : 'display: none;'; ?>">
+                        <div class="row">
+                            <div class="col-md-6">
+                                <div class="form-group">
+                                    <label class="form-label" for="chat_silence_minutes">Chat Silence Duration (minutes)</label>
+                                    <?php echo $form->number("chat_silence_minutes", $chat_silence_minutes ?? 3, [
+                                        "class" => "form-control",
+                                        "min" => "1",
+                                        "max" => "60"
+                                    ]); ?>
+                                    <small class="text-muted">Send notification after this many minutes of silence in normal chat</small>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="form-group">
+                                    <label class="form-label" for="form_silence_minutes">Form Completion Delay (minutes)</label>
+                                    <?php echo $form->number("form_silence_minutes", $form_silence_minutes ?? 1, [
+                                        "class" => "form-control",
+                                        "min" => "0",
+                                        "max" => "30"
+                                    ]); ?>
+                                    <small class="text-muted">Send notification after this delay following form submissions</small>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="alert alert-info">
+                            <h6>How Automatic Notifications Work</h6>
+                            <ul class="mb-0">
+                                <li><strong>Chat Silence:</strong> After a chat conversation, if there's no activity for the specified minutes, an email notification is sent</li>
+                                <li><strong>Form Submissions:</strong> When a user completes a form, an email is sent after the specified delay</li>
+                                <li><strong>Continued Conversations:</strong> If a chat resumes after silence, a new notification will be sent after the next period of inactivity</li>
+                            </ul>
+                        </div>
+                        
                     </div>
                 </fieldset>
 
@@ -1514,6 +1564,7 @@ $ps = $app->make('helper/form/page_selector');
                                     resultsDiv.innerHTML = '<div class="alert alert-danger">Error: ' + error.message + '</div>';
                                 });
                         }
+
                     </script>
 
                     <!-- Debug Context Fields -->
@@ -1569,6 +1620,16 @@ $ps = $app->make('helper/form/page_selector');
                                 debugModeCheckbox.addEventListener('change', function () {
                                     debugContextFields.style.display = this.checked ? 'block' : 'none';
                                     window.katalysisAIDebugMode = this.checked;
+                                });
+                            }
+                            
+                            // Toggle auto notification settings visibility
+                            const autoNotificationCheckbox = document.getElementById('enable_auto_notifications');
+                            const autoNotificationSettings = document.getElementById('auto_notification_settings');
+                            
+                            if (autoNotificationCheckbox && autoNotificationSettings) {
+                                autoNotificationCheckbox.addEventListener('change', function () {
+                                    autoNotificationSettings.style.display = this.checked ? 'block' : 'none';
                                 });
                             }
                         });
