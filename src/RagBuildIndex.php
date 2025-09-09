@@ -105,7 +105,7 @@ class RagBuildIndex {
     /**
      * Get the OpenAI embeddings provider instance
      */
-    private function getEmbeddingProvider(): OpenAIEmbeddingsProvider
+    public function getEmbeddingProvider(): OpenAIEmbeddingsProvider
     {
         return new OpenAIEmbeddingsProvider(
             key: Config::get('katalysis.ai.open_ai_key'),
@@ -116,10 +116,18 @@ class RagBuildIndex {
     /**
      * Get the file vector store instance
      */
-    private function getVectorStore(int $topK = 4): FileVectorStore
+    public function getVectorStore(int $topK = 4): FileVectorStore
     {
+
+        $storageDir = DIR_APPLICATION . '/files/neuron';
+
+        if (!is_dir($storageDir)) {
+            if (!mkdir($storageDir, 0775, true) && !is_dir($storageDir)) {
+                throw new \RuntimeException("Failed to create directory: $storageDir");
+            }
+        }
         return new FileVectorStore(
-            directory: DIR_APPLICATION . '/files/neuron',
+            directory: $storageDir,
             topK: $topK
         );
     }
