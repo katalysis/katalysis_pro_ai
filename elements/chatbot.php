@@ -112,7 +112,7 @@
                         // Use the existing AI system to generate the welcome message
                         $.ajax({
                             type: "POST",
-                            url: "<?= $controller->action('ask_ai') ?>",
+                            url: "<?php echo \Concrete\Core\Support\Facade\Url::to('/dashboard/katalysis_pro_ai/chat_bot_settings/ask_ai'); ?>",
                             data: JSON.stringify(requestData),
                             contentType: "application/json",
                             headers: {
@@ -463,7 +463,7 @@
 
                         $.ajax({
                             type: "POST",
-                            url: "<?= $controller->action('ask_ai') ?>",
+                            url: "<?php echo \Concrete\Core\Support\Facade\Url::to('/dashboard/katalysis_pro_ai/chat_bot_settings/ask_ai'); ?>",
                             data: JSON.stringify(requestData),
                             contentType: "application/json",
                             headers: {
@@ -585,7 +585,7 @@
 
                         $.ajax({
                             type: "POST",
-                            url: "<?= $controller->action('ask_ai') ?>",
+                            url: "<?php echo \Concrete\Core\Support\Facade\Url::to('/dashboard/katalysis_pro_ai/chat_bot_settings/ask_ai'); ?>",
                             data: JSON.stringify(requestData),
                             contentType: "application/json",
                             headers: {

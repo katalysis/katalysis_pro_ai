@@ -593,7 +593,7 @@ function logChatToDatabase(chatbotId, chatHistory) {
     };
     
     // Send to backend endpoint for database logging
-    fetch('/index.php/dashboard/katalysis_pro_ai/chat_bot_settings/log_chat/', {
+    fetch('<?php echo \Concrete\Core\Support\Facade\Url::to('/dashboard/katalysis_pro_ai/chat_bot_settings/log_chat'); ?>', {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -656,7 +656,7 @@ function updateChatInDatabase(chatbotId, chatHistory) {
     };
     
     // Send to backend endpoint for updating chat
-    fetch('/index.php/dashboard/katalysis_pro_ai/chat_bot_settings/update_chat/', {
+    fetch('<?php echo \Concrete\Core\Support\Facade\Url::to('/dashboard/katalysis_pro_ai/chat_bot_settings/update_chat'); ?>', {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -783,7 +783,7 @@ function sendToAI(chatbotId, message) {
         window.pendingWelcomeMessage = null;
     }
     
-    fetch('/index.php/dashboard/katalysis_pro_ai/chat_bot_settings/ask_ai/', {
+    fetch('<?php echo \Concrete\Core\Support\Facade\Url::to('/dashboard/katalysis_pro_ai/chat_bot_settings/ask_ai'); ?>', {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -948,7 +948,7 @@ function generateWelcomeMessage(chatbotId, config) {
     processedPrompt = processedPrompt.replace(/{time_of_day}/g, timeOfDay);
     
     // Now send the processed prompt to AI
-    fetch('/index.php/dashboard/katalysis_pro_ai/chat_bot_settings/ask_ai/', {
+    fetch('<?php echo \Concrete\Core\Support\Facade\Url::to('/dashboard/katalysis_pro_ai/chat_bot_settings/ask_ai'); ?>', {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -1006,7 +1006,7 @@ function executeAction(chatbotId, actionId) {
     console.log('executeAction called:', chatbotId, actionId, config);
     
     // First check if this is a form action by getting action info
-    fetch('/index.php/dashboard/katalysis_pro_ai/chat_bot_settings/get_action_info/', {
+    fetch('<?php echo \Concrete\Core\Support\Facade\Url::to('/dashboard/katalysis_pro_ai/chat_bot_settings/get_action_info'); ?>', {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -1063,7 +1063,7 @@ function executeAction(chatbotId, actionId) {
 }
 
 function executeRegularAction(chatbotId, actionId) {
-    fetch('/index.php/dashboard/katalysis_pro_ai/chat_bot_settings/execute_action/', {
+    fetch('<?php echo \Concrete\Core\Support\Facade\Url::to('/dashboard/katalysis_pro_ai/chat_bot_settings/execute_action'); ?>', {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -1107,7 +1107,7 @@ function startFormFromActionBlock(chatbotId, actionId) {
     
     console.log('Sending start_form request:', requestData);
     
-    fetch('/index.php/dashboard/katalysis_pro_ai/chat_bot_settings/start_form/', {
+    fetch('<?php echo \Concrete\Core\Support\Facade\Url::to('/dashboard/katalysis_pro_ai/chat_bot_settings/start_form'); ?>', {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -1527,7 +1527,7 @@ function submitSimpleForm(chatbotId) {
     }
     
     // Submit to backend
-    fetch('/index.php/dashboard/katalysis_pro_ai/chat_bot_settings/submit_simple_form/', {
+    fetch('<?php echo \Concrete\Core\Support\Facade\Url::to('/dashboard/katalysis_pro_ai/chat_bot_settings/submit_simple_form'); ?>', {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -1756,7 +1756,7 @@ function sendFormFieldResponse(chatbotId, fieldKey, value) {
         field_key: fieldKey
     };
     
-    fetch('/index.php/dashboard/katalysis_pro_ai/chat_bot_settings/ask_ai/', {
+    fetch('<?php echo \Concrete\Core\Support\Facade\Url::to('/dashboard/katalysis_pro_ai/chat_bot_settings/ask_ai'); ?>', {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
