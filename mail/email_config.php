@@ -89,6 +89,10 @@ $header = '
             
             .a[href^="tel"], a[href^="sms"] {text-decoration:none!important;color:'. $kColLink.'!important;pointer-events:none!important;cursor:default!important;}
             .mobile_link a[href^="tel"], .mobile_link a[href^="sms"] {text-decoration:none!important;color:'. $kColLink.'!important;pointer-events:auto!important;cursor:default!important;}
+            
+            /* User message panel link styling - force white links in blue panels */
+            .user-message a, .user-panel a {color: white !important;}
+            div[style*="background: #007bff"] a {color: white !important;}
 
             /* MOBILE STYLES */
             @media only screen and (max-width: 480px){

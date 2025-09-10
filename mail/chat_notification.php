@@ -17,10 +17,29 @@ function cleanChatContentForEmail($content) {
     if (empty($content)) return '';
     
     // Handle form submissions specially
-    if (strpos($content, 'Form submitted:') === 0) {
-        // Extract form data and format nicely
+    if (strpos($content, 'Form submitted:') === 0 || strpos($content, 'Form Submitted -') === 0) {
+        // Extract form data and format nicely for email
         $content = preg_replace('/<div class="form-submission-summary">.*?<\/div>/s', '', $content);
         $content = str_replace('Form submitted:', 'Form submitted with the following information:', $content);
+        $content = str_replace('Form Submitted -', 'Form submitted -', $content);
+        
+        // Ensure proper line formatting for form data
+        // Look for pattern like "Name: John\nEmail: john@example.com\n" and format properly
+        $lines = explode("\n", $content);
+        $formattedLines = [];
+        foreach ($lines as $line) {
+            $line = trim($line);
+            if (!empty($line)) {
+                // If this looks like form field data (has colon), format it nicely
+                if (strpos($line, ':') !== false && !strpos($line, 'Form submitted')) {
+                    $formattedLines[] = '<strong>' . $line . '</strong>';
+                } else {
+                    $formattedLines[] = $line;
+                }
+            }
+        }
+        $content = implode('<br>', $formattedLines);
+        
         return $content;
     }
     
@@ -36,6 +55,9 @@ function cleanChatContentForEmail($content) {
     // Remove any remaining HTML tags except basic formatting
     $allowedTags = '<br><strong><em><p>';
     $content = strip_tags($content, $allowedTags);
+    
+    // Convert any remaining newlines to breaks
+    $content = nl2br($content);
     
     // Clean up extra whitespace
     $content = preg_replace('/\s+/', ' ', $content);
@@ -81,13 +103,13 @@ if (!empty($chatContent)) {
                 <div style="color: #333; line-height: 1.4;">' . nl2br($cleanContent) . '</div>
             </div>';
         } else if ($message['sender'] === 'user') {
-            // User message: white text on blue background
+            // User message: white text on blue background with white links
             $timestamp = $message['timestamp'] ? ' - ' . $message['timestamp'] : '';
             $email .= '<div style="margin-bottom: 15px; padding: 12px; background: #007bff; color: white; border-radius: 8px;">
                 <div style="font-weight: bold; margin-bottom: 8px;">
                     <img src="' . Package::getByHandle('katalysis_pro_ai')->getRelativePath() . '/user-icon.png" alt="User" style="width: 24px; height: 24px; margin-right: 5px; vertical-align: middle;"> You' . $timestamp . '
                 </div>
-                <div style="line-height: 1.4;">' . nl2br($cleanContent) . '</div>
+                <div style="line-height: 1.4; color: white;">' . preg_replace('/<a([^>]*)>/', '<a$1 style="color: white !important;">', $cleanContent) . '</div>
             </div>';
         } else {
             // AI message: black text on light grey background
