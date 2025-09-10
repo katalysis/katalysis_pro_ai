@@ -80,8 +80,8 @@ class Controller extends Package
         $al->register('javascript', 'katalysis-ai-chat-forms', 'js/chat-forms.js', ['version' => $version, 'position' => Asset::ASSET_POSITION_FOOTER, 'minify' => false, 'combine' => false], $this);
         
         $manager = $this->app->make(TaskManager::class);
-		$manager->extend('build_rag_index', function () {
-			return new BuildRagIndexController();
+		$manager->extend('build_rag_index', function ($app) {
+			return new BuildRagIndexController($app);
 		});
     }
 
