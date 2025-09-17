@@ -87,6 +87,7 @@
         margin: 10px 0;
     }
 
+    <?php if (\Concrete\Core\Support\Facade\Config::get('katalysis.search.enable_debug_panel', false)): ?>
     /* Debug Panel Performance Styles */
     .katalysis-ai-search .debug-panel {
         font-size: 0.9em;
@@ -171,6 +172,7 @@
     .katalysis-ai-search .debug-panel .toggle-debug:hover {
         background-color: rgba(255,255,255,0.1);
     }
+    <?php endif; // End debug panel CSS ?>
 
     .katalysis-ai-search .page-link {
         margin: 8px 0 0 0;
@@ -434,12 +436,8 @@
             <div class="search-results-container" style="display: none;">
                 <!-- Debug Panel -->
                 <?php 
-                // Show debug panel for admins or with debug parameter
-                $showDebugPanel = (
-                    (isset($_GET['debug']) && $_GET['debug'] == '1') ||
-                    (\Core::make('Concrete\Core\User\User')->isRegistered() && 
-                     \Core::make('Concrete\Core\User\User')->isSuperUser())
-                );
+                // Show debug panel only if enabled in settings
+                $showDebugPanel = \Concrete\Core\Support\Facade\Config::get('katalysis.search.enable_debug_panel', false);
                 ?>
                 <?php if ($showDebugPanel): ?>
                 <div class="debug-panel mb-4" style="display: none;">
@@ -633,9 +631,9 @@
         }
 
         function displayInitialResults(data) {
-            // Populate debug panel if debug data is available
-            if (data.debug && resultsDiv.find('.debug-panel').length > 0) {
-                populateDebugPanel(data.debug);
+            // Populate debug panel if debug data is available and debug panel exists
+            if (data.debug && resultsDiv.find('.debug-panel').length > 0 && typeof populateDebugPanel === 'function') {
+                populateDebugPanel(data.debug, data.response);
                 resultsDiv.find('.debug-panel').show();
             }
 
@@ -799,9 +797,9 @@
             console.log('Specialists data:', data.specialists);
             console.log('Reviews data:', data.reviews);
 
-            // Populate debug panel if debug data is available
-            if (data.debug && resultsDiv.find('.debug-panel').length > 0) {
-                populateDebugPanel(data.debug);
+            // Populate debug panel if debug data is available and debug panel exists
+            if (data.debug && resultsDiv.find('.debug-panel').length > 0 && typeof populateDebugPanel === 'function') {
+                populateDebugPanel(data.debug, data.response);
                 resultsDiv.find('.debug-panel').show();
             }
 
@@ -1063,7 +1061,8 @@
             errorDiv.hide();
         }
 
-        function populateDebugPanel(debugData) {
+        <?php if ($showDebugPanel): ?>
+        function populateDebugPanel(debugData, responseText = null) {
             console.log('Populating debug panel with:', debugData);
             
             // Populate Intent Analysis (from combined response)
@@ -1076,6 +1075,10 @@
                     <div class="debug-item">
                         <span class="debug-label">Intent Type:</span>
                         <span class="debug-value">${intent.intent_type || intent.primary_intent || 'unknown'}</span>
+                    </div>
+                    <div class="debug-item">
+                        <span class="debug-label">Confidence:</span>
+                        <span class="debug-value">${intent.confidence ? (intent.confidence * 100).toFixed(1) + '%' : 'Not provided'}</span>
                     </div>
                     <div class="debug-item">
                         <span class="debug-label">Service Area:</span>
@@ -1099,11 +1102,60 @@
                     ` : ''}
                     <div class="debug-item">
                         <span class="debug-label">Urgency:</span>
-                        <span class="debug-value">${intent.urgency_level || intent.urgency_assessment || 'medium'}</span>
+                        <span class="debug-value">${intent.urgency_level || intent.urgency || 'medium'}</span>
                     </div>
+                    ${intent.key_phrases && intent.key_phrases.length > 0 ? `
+                    <div class="debug-item">
+                        <span class="debug-label">Key Phrases:</span>
+                        <div class="debug-value">
+                            ${intent.key_phrases.map(phrase => `<span class="badge bg-light text-dark me-1">${phrase}</span>`).join('')}
+                        </div>
+                    </div>
+                    ` : ''}
                 `;
             }
             classificationDiv.html(classificationHtml);
+            
+            // Populate Response Structure Analysis (strategy section)
+            const strategyDiv = resultsDiv.find('.debug-strategy');
+            let strategyHtml = '';
+            
+            if (responseText) {
+                const response = responseText;
+                const hasDirectAnswer = response.includes('DIRECT ANSWER:');
+                const hasRelatedServices = response.includes('RELATED SERVICES:');
+                const hasCapabilities = response.includes('OUR CAPABILITIES:');
+                const hasPracticalGuidance = response.includes('PRACTICAL GUIDANCE:');
+                const hasWhyChooseUs = response.includes('WHY CHOOSE US:');
+                
+                const structureScore = [hasDirectAnswer, hasRelatedServices, hasCapabilities, hasPracticalGuidance, hasWhyChooseUs].filter(Boolean).length;
+                const totalExpected = 5;
+                
+                strategyHtml = `
+                    <div class="mt-3">
+                        <h6 class="text-muted"><i class="fas fa-list-check"></i> Response Structure</h6>
+                        <div class="debug-item">
+                            <span class="debug-label">Structure Score:</span>
+                            <span class="debug-value ${structureScore === totalExpected ? 'text-success' : 'text-warning'}">${structureScore}/${totalExpected} sections</span>
+                        </div>
+                        <div class="debug-item">
+                            <span class="debug-label">Sections Found:</span>
+                            <div class="debug-value">
+                                <span class="badge ${hasDirectAnswer ? 'bg-success' : 'bg-light text-dark'} me-1">Direct Answer</span>
+                                <span class="badge ${hasRelatedServices ? 'bg-success' : 'bg-light text-dark'} me-1">Related Services</span>
+                                <span class="badge ${hasCapabilities ? 'bg-success' : 'bg-light text-dark'} me-1">Our Capabilities</span>
+                                <span class="badge ${hasPracticalGuidance ? 'bg-success' : 'bg-light text-dark'} me-1">Practical Guidance</span>
+                                <span class="badge ${hasWhyChooseUs ? 'bg-success' : 'bg-light text-dark'} me-1">Why Choose Us</span>
+                            </div>
+                        </div>
+                        <div class="debug-item">
+                            <span class="debug-label">Response Length:</span>
+                            <span class="debug-value">${response.length} characters</span>
+                        </div>
+                    </div>
+                `;
+            }
+            strategyDiv.html(strategyHtml);
             
             // Populate AI Input section (middle column - candidate documents)
             const aiInputDiv = resultsDiv.find('.debug-ai-input');
@@ -1360,5 +1412,6 @@
                 icon.removeClass('fa-chevron-down').addClass('fa-chevron-up');
             }
         });
+        <?php endif; // End debug panel conditional ?>
     });
 </script>
