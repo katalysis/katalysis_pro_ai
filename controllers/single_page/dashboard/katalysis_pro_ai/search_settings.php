@@ -25,23 +25,31 @@ class SearchSettings extends DashboardPageController
     public function view()
     {
         // Get current settings from config
-        $searchResultPrompt = Config::get('katalysis.search.result_prompt', 
-            'Based on the search query "{search_query}", provide a comprehensive response that includes relevant information from our knowledge base.');
-
         $maxResults = Config::get('katalysis.search.max_results', 8);
         $resultLength = Config::get('katalysis.search.result_length', 'medium');
         $includePageLinks = Config::get('katalysis.search.include_page_links', true);
         $showSnippets = Config::get('katalysis.search.show_snippets', true);
         
-        // Get specialists settings
-        $specialistsPrompt = Config::get('katalysis.search.specialists_prompt',
-            'Based on the search query, recommend relevant team members or specialists who can help.');
+        // Get specialists settings (AI-driven, no manual prompts needed)
+        $enableSpecialists = Config::get('katalysis.search.enable_specialists', true);
         $maxSpecialists = Config::get('katalysis.search.max_specialists', 3);
 
-        // Get reviews settings  
-        $reviewsPrompt = Config::get('katalysis.search.reviews_prompt',
-            'Find relevant client reviews and testimonials related to the search topic.');
+        // Get reviews settings (AI-driven, no manual prompts needed)
+        $enableReviews = Config::get('katalysis.search.enable_reviews', true);
         $maxReviews = Config::get('katalysis.search.max_reviews', 3);
+        
+        // Get places settings
+        $enablePlaces = Config::get('katalysis.search.enable_places', true);
+        $maxPlaces = Config::get('katalysis.search.max_places', 3);
+        
+        // Get advanced AI prompts (split into hardcoded structure + editable response format)
+        $responseFormatInstructions = Config::get('katalysis.search.response_format_instructions', $this->getDefaultResponseFormatInstructions());
+        
+        // Get known false positives
+        $knownFalsePositives = Config::get('katalysis.search.known_false_positives', $this->getDefaultKnownFalsePositives());
+
+        // Get debug panel setting
+        $enableDebugPanel = Config::get('katalysis.search.enable_debug_panel', false);
 
         // Get search statistics
         $searchStats = [
@@ -55,17 +63,126 @@ class SearchSettings extends DashboardPageController
         $popularTerms = $this->getPopularSearchTerms();
 
         // Set view variables
-        $this->set('searchResultPrompt', $searchResultPrompt);
         $this->set('maxResults', $maxResults);
         $this->set('resultLength', $resultLength);
         $this->set('includePageLinks', $includePageLinks);
         $this->set('showSnippets', $showSnippets);
-        $this->set('specialistsPrompt', $specialistsPrompt);
+        $this->set('enableSpecialists', $enableSpecialists);
         $this->set('maxSpecialists', $maxSpecialists);  
-        $this->set('reviewsPrompt', $reviewsPrompt);
+        $this->set('enableReviews', $enableReviews);
         $this->set('maxReviews', $maxReviews);
+        $this->set('responseFormatInstructions', $responseFormatInstructions);
+        $this->set('knownFalsePositives', $knownFalsePositives);
+        $this->set('enableDebugPanel', $enableDebugPanel);
         $this->set('searchStats', $searchStats);
         $this->set('popularTerms', $popularTerms);
+        
+        // Set default values for comparison (only for AI-configurable prompts)
+        $this->set('defaultResponseFormatInstructions', $this->getDefaultResponseFormatInstructions());
+        $this->set('defaultKnownFalsePositives', $this->getDefaultKnownFalsePositives());
+        
+        // Set default values for statistics (since we removed the display)
+        $this->set('searchesToday', 0);
+        $this->set('searchesThisMonth', 0);
+        $this->set('popularTerms', []);
+    }
+
+    /**
+     * Get hardcoded intent analysis structure (not user-editable)
+     */
+    private function getIntentAnalysisStructure(): string
+    {
+        return "TASK: Analyze this query and provide a comprehensive structured response. Return JSON with both intent analysis AND detailed response:\n\n" .
+               "```json\n" .
+               "{\n" .
+               "  \"intent\": {\n" .
+               "    \"intent_type\": \"string (information, help, contact, booking, pricing, comparison, complaint, urgent, question)\",\n" .
+               "    \"confidence\": \"number (0.0-1.0)\",\n" .
+               "    \"service_area\": \"string or null (specific service mentioned)\",\n" .
+               "    \"specialism_id\": \"number or null (matching specialism ID if applicable)\",\n" .
+               "    \"urgency\": \"string (low, medium, high)\",\n" .
+               "    \"location_mentioned\": \"string or null\",\n" .
+               "    \"key_phrases\": [\"array of important phrases from query\"]\n" .
+               "  },\n" .
+               "  \"response\": \"string (structured response using format below)\"\n" .
+               "}\n" .
+               "```\n\n";
+    }
+
+    /**
+     * Get default response format instructions (user-editable)
+     */
+    private function getDefaultResponseFormatInstructions(): string
+    {
+        return "RESPONSE STRUCTURE - Use this exact format:\n" .
+               "DIRECT ANSWER: [Direct answer to their specific question or need]\n" .
+               "RELATED SERVICES: [Additional relevant services we offer]\n" .
+               "OUR CAPABILITIES: [How our expertise specifically helps]\n" .
+               "PRACTICAL GUIDANCE: [Next steps, what to prepare, or actions to take]\n" .
+               "WHY CHOOSE US: [Benefits of choosing our firm, unique value proposition]\n\n" .
+               "RESPONSE GUIDELINES:\n" .
+               "- Use professional, reassuring, and confident tone\n" .
+               "- Be specific about our legal services and expertise\n" .
+               "- Include practical next steps and actionable advice\n" .
+               "- Highlight our unique strengths and experience\n" .
+               "- Each section should be 1-2 sentences, clear and informative\n" .
+               "- End with a call to action encouraging contact";
+    }
+
+    /**
+     * Get default intent analysis prompt (combines structure + response format)
+     */
+    private function getDefaultIntentAnalysisPrompt(): string
+    {
+        return $this->getIntentAnalysisStructure() . $this->getDefaultResponseFormatInstructions();
+    }
+
+    /**
+     * Get full intent analysis prompt (combines hardcoded structure + user-editable format)
+     */
+    private function getFullIntentAnalysisPrompt(string $userResponseFormat): string
+    {
+        return $this->getIntentAnalysisStructure() . $userResponseFormat;
+    }
+
+    /**
+     * Get default known false positives
+     */
+    private function getDefaultKnownFalsePositives(): string
+    {
+        return json_encode([
+            ['query' => 'crash', 'false' => 'crush'],
+            ['query' => 'car', 'false' => 'care'],
+            ['query' => 'accident', 'false' => 'incident']
+        ], JSON_PRETTY_PRINT);
+    }
+
+    /**
+     * Get default response format instructions via AJAX
+     */
+    public function get_default_response_format_instructions()
+    {
+        if (!$this->token->validate('save_search_settings')) {
+            return new JsonResponse(['error' => $this->token->getErrorMessage()], 400);
+        }
+        
+        return new JsonResponse([
+            'instructions' => $this->getDefaultResponseFormatInstructions()
+        ]);
+    }
+
+    /**
+     * Get default known false positives via AJAX
+     */
+    public function get_default_known_false_positives()
+    {
+        if (!$this->token->validate('save_search_settings')) {
+            return new JsonResponse(['error' => $this->token->getErrorMessage()], 400);
+        }
+        
+        return new JsonResponse([
+            'patterns' => $this->getDefaultKnownFalsePositives()
+        ]);
     }
 
     public function save()
@@ -78,21 +195,35 @@ class SearchSettings extends DashboardPageController
         $data = $this->request->request->all();
 
         // Save basic settings
-        Config::save('katalysis.search.result_prompt', $data['search_result_prompt'] ?? '');
         Config::save('katalysis.search.max_results', (int)($data['max_results'] ?? 8));
         Config::save('katalysis.search.result_length', $data['result_length'] ?? 'medium');
         Config::save('katalysis.search.include_page_links', !empty($data['include_page_links']));
         Config::save('katalysis.search.show_snippets', !empty($data['show_snippets']));
 
-        // Save specialists settings
-        Config::save('katalysis.search.specialists_prompt', $data['specialists_prompt'] ?? '');
+        // Save AI-driven specialists and reviews settings (no manual prompts needed)
         Config::save('katalysis.search.enable_specialists', !empty($data['enable_specialists']));
         Config::save('katalysis.search.max_specialists', (int)($data['max_specialists'] ?? 3));
-
-        // Save reviews settings
-        Config::save('katalysis.search.reviews_prompt', $data['reviews_prompt'] ?? '');
         Config::save('katalysis.search.enable_reviews', !empty($data['enable_reviews']));
         Config::save('katalysis.search.max_reviews', (int)($data['max_reviews'] ?? 3));
+
+        // Save advanced AI prompts
+        Config::save('katalysis.search.response_format_instructions', $data['response_format_instructions'] ?? '');
+        
+        // Save known false positives (validate JSON format)
+        $knownFalsePositivesJson = $data['known_false_positives'] ?? '';
+        if (!empty($knownFalsePositivesJson)) {
+            $decoded = json_decode($knownFalsePositivesJson, true);
+            if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
+                Config::save('katalysis.search.known_false_positives', $knownFalsePositivesJson);
+            } else {
+                $this->error->add(t('Known false positives must be valid JSON format.'));
+            }
+        } else {
+            Config::save('katalysis.search.known_false_positives', $this->getDefaultKnownFalsePositives());
+        }
+
+        // Save debug panel setting
+        Config::save('katalysis.search.enable_debug_panel', !empty($data['enable_debug_panel']));
 
         $this->flash('success', t('Search settings saved successfully.'));
         $this->redirect('/dashboard/katalysis_pro_ai/search_settings');
@@ -146,36 +277,13 @@ class SearchSettings extends DashboardPageController
                 $specialismsList = "Available legal specialisms: " . implode(', ', array_column($allSpecialisms, 'treeNodeName'));
             }
             
+            // Get configurable intent analysis prompt
+            $intentAnalysisPrompt = Config::get('katalysis.search.intent_analysis_prompt', $this->getDefaultIntentAnalysisPrompt());
+            
             // COMBINED PROMPT: Intent analysis + response generation in single AI call
             $combinedPrompt = "LEGAL QUERY: \"$query\"\n\n" .
                 "$specialismsList\n\n" .
-                "TASK: Analyze this query and provide a comprehensive response. Return JSON with both intent analysis AND response:\n\n" .
-                "{\n" .
-                '  "intent": {' . "\n" .
-                '    "intent_type": "service|location|information|person",' . "\n" .
-                '    "service_area": "most specific matching specialism name or null",' . "\n" .
-                '    "location_mentioned": "location name or null",' . "\n" .
-                '    "person_name": "person name if searching for a specific person or null",' . "\n" .
-                '    "urgency_level": "low|medium|high"' . "\n" .
-                '  },' . "\n" .
-                '  "response": "comprehensive legal response addressing the query with practical guidance"' . "\n" .
-                "}\n\n" .
-                "INTENT ANALYSIS GUIDELINES:\n" .
-                "- Use 'person' intent_type when query contains a person's name or is asking about a specific individual\n" .
-                "- Extract person_name when someone is looking for a specific solicitor, lawyer, or staff member\n" .
-                "- Use 'service' for legal service requests (conveyancing, family law, etc.)\n" .
-                "- Use 'location' for office/location-specific queries\n" .
-                "- Use 'information' for general legal advice or information requests\n" .
-                "- For service_area: Choose the MOST SPECIFIC specialism that matches the query (e.g., prefer 'Road Accident' over 'Injury Claims' for car accident queries)\n" .
-                "- If query mentions cars, vehicles, traffic, roads, driving: choose 'Road Accident' not 'Injury Claims'\n" .
-                "- Always prefer child/specific specialisms over parent/broad categories when relevant\n\n" .
-                "RESPONSE REQUIREMENTS:\n" .
-                "- Provide a professional, comprehensive legal response\n" .
-                "- Address the specific legal issue raised\n" .
-                "- Offer practical next steps\n" .
-                "- Explain how your legal services can help\n" .
-                "- Use clear, accessible language\n" .
-                "- Structure as: DIRECT ANSWER → RELATED SERVICES → OUR CAPABILITIES → PRACTICAL GUIDANCE → WHY CHOOSE US";
+                $intentAnalysisPrompt;
             
             error_log("OPTIMIZED: Using combined intent+response prompt");
             
@@ -189,8 +297,18 @@ class SearchSettings extends DashboardPageController
             $intent = null;
             $aiResponse = '';
             
+            // Clean up the response - remove markdown code blocks if present
+            $cleanedContent = $combinedContent;
+            if (preg_match('/```json\s*(.*?)\s*```/s', $cleanedContent, $matches)) {
+                $cleanedContent = trim($matches[1]);
+            } else {
+                // Remove any other markdown code block markers
+                $cleanedContent = preg_replace('/```[a-z]*\s*|\s*```/', '', $cleanedContent);
+                $cleanedContent = trim($cleanedContent);
+            }
+            
             // Try to parse as JSON first
-            $jsonData = json_decode($combinedContent, true);
+            $jsonData = json_decode($cleanedContent, true);
             if ($jsonData && isset($jsonData['intent']) && isset($jsonData['response'])) {
                 $intent = $jsonData['intent'];
                 $aiResponse = $jsonData['response'];
@@ -268,11 +386,15 @@ class SearchSettings extends DashboardPageController
             // PHASE 3: Targeted data retrieval based on intent
             $dataStartTime = microtime(true);
             
-            $specialists = $this->getTargetedSpecialists($query, $intent);
+            // Check if specialists are enabled
+            $enableSpecialists = Config::get('katalysis.search.enable_specialists', true);
+            $specialists = $enableSpecialists ? $this->getTargetedSpecialists($query, $intent) : [];
             $specialistsTime = round((microtime(true) - $dataStartTime) * 1000, 2);
             
             $reviewsStartTime = microtime(true);
-            $reviews = $this->getTargetedReviews($query, $intent);
+            // Check if reviews are enabled
+            $enableReviews = Config::get('katalysis.search.enable_reviews', true);
+            $reviews = $enableReviews ? $this->getTargetedReviews($query, $intent) : [];
             $reviewsTime = round((microtime(true) - $reviewsStartTime) * 1000, 2);
             
             $placesStartTime = microtime(true);
@@ -342,6 +464,16 @@ class SearchSettings extends DashboardPageController
      */
     public function load_specialists()
     {
+        // Check if specialists are enabled
+        $enableSpecialists = Config::get('katalysis.search.enable_specialists', true);
+        if (!$enableSpecialists) {
+            return $this->app->make(ResponseFactory::class)->json([
+                'success' => true,
+                'specialists' => [],
+                'processing_time' => 0
+            ]);
+        }
+        
         $query = trim($this->request->request->get('query', ''));
         $intent = $this->request->request->get('intent', []);
         
@@ -394,6 +526,16 @@ class SearchSettings extends DashboardPageController
      */
     public function load_reviews()
     {
+        // Check if reviews are enabled
+        $enableReviews = Config::get('katalysis.search.enable_reviews', true);
+        if (!$enableReviews) {
+            return $this->app->make(ResponseFactory::class)->json([
+                'success' => true,
+                'reviews' => [],
+                'processing_time' => 0
+            ]);
+        }
+        
         $query = trim($this->request->request->get('query', ''));
         $intent = $this->request->request->get('intent', []);
         
@@ -1147,12 +1289,9 @@ class SearchSettings extends DashboardPageController
                         // Check if the exact query word appears anywhere in title or content
                         $docContent = strtolower($doc['content'] ?? '');
                         if (strpos($titleLower, $queryWord) === false && strpos($docContent, $queryWord) === false) {
-                            // Specific known false positive patterns
-                            $knownFalsePositives = [
-                                ['query' => 'crash', 'false' => 'crush'],
-                                ['query' => 'car', 'false' => 'care'],
-                                ['query' => 'accident', 'false' => 'incident']
-                            ];
+                            // Get configurable known false positive patterns
+                            $knownFalsePositivesJson = Config::get('katalysis.search.known_false_positives', $this->getDefaultKnownFalsePositives());
+                            $knownFalsePositives = json_decode($knownFalsePositivesJson, true) ?: [];
                             
                             $isKnownFalsePositive = false;
                             foreach ($knownFalsePositives as $pattern) {
