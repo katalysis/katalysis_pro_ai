@@ -4,24 +4,24 @@ namespace KatalysisProAi\Command;
 
 defined('C5_EXECUTE') or die("Access Denied.");
 
-use KatalysisProAi\RagBuildIndex;
+use KatalysisProAi\PageIndexService;
 use Concrete\Core\Support\Facade\Log;
 use Concrete\Core\Page\PageList;
 use Concrete\Core\Command\Batch\Batch;
 
-class BatchBuildRagIndexCommandHandler
+class BuildPageIndexCommandHandler
 {
-    public function __invoke(BatchBuildRagIndexCommand $command)
+    public function __invoke(BuildPageIndexCommand $command)
     {
         try {
-            Log::addInfo('Starting batch RAG index rebuild preparation...');
+            Log::addInfo('Starting batch page index rebuild preparation...');
             
-            $ragBuildIndex = new RagBuildIndex();
+            $pageIndexService = new PageIndexService();
             
             // Clear existing index if requested
             if ($command->shouldClearExistingIndex()) {
                 Log::addInfo('Clearing existing index...');
-                $ragBuildIndex->clearIndex();
+                $pageIndexService->clearIndex();
             }
             
             // Get all pages to index
@@ -43,7 +43,7 @@ class BatchBuildRagIndexCommandHandler
             // Create batch with individual page indexing commands
             $batch = Batch::create();
             foreach ($validPageIds as $pageId) {
-                $batch->add(new IndexSinglePageCommand($pageId));
+                $batch->add(new IndexPageCommand($pageId));
             }
             
             Log::addInfo('Batch preparation completed. Ready to process ' . count($validPageIds) . ' pages.');
@@ -51,7 +51,7 @@ class BatchBuildRagIndexCommandHandler
             return $batch;
             
         } catch (\Exception $e) {
-            Log::addError('Batch RAG index rebuild preparation failed: ' . $e->getMessage());
+            Log::addError('Batch page index rebuild preparation failed: ' . $e->getMessage());
             throw $e;
         }
     }

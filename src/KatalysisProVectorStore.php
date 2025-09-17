@@ -8,11 +8,11 @@ use NeuronAI\RAG\VectorStore\VectorSimilarity;
 use NeuronAI\RAG\Document;
 use NeuronAI\Exceptions\VectorStoreException;
 
-class CustomFileVectorStore implements VectorStoreInterface
+class KatalysisProVectorStore implements VectorStoreInterface
 {
     private FileVectorStore $fileVectorStore;
 
-    public function __construct(string $directory, int $topK = 4, string $name = 'neuron', string $ext = '.store')
+    public function __construct(string $directory, int $topK = 4, string $name = 'pages', string $ext = '.store')
     {
         $this->fileVectorStore = new FileVectorStore($directory, $topK, $name, $ext);
     }
@@ -30,6 +30,19 @@ class CustomFileVectorStore implements VectorStoreInterface
     public function deleteBySource(string $sourceType, string $sourceName): void
     {
         $this->fileVectorStore->deleteBySource($sourceType, $sourceName);
+    }
+
+    public function clearStore(): void
+    {
+        // Clear the vector store file by truncating it
+        $reflection = new \ReflectionClass($this->fileVectorStore);
+        $getFilePathMethod = $reflection->getMethod('getFilePath');
+        $getFilePathMethod->setAccessible(true);
+        $filePath = $getFilePathMethod->invoke($this->fileVectorStore);
+        
+        if (file_exists($filePath)) {
+            file_put_contents($filePath, '');
+        }
     }
 
     public function similaritySearch(array $embedding): array
@@ -50,6 +63,12 @@ class CustomFileVectorStore implements VectorStoreInterface
         
         $distances = [];
 
+        // Get the raw query string from the embedding metadata if available
+        $queryText = '';
+        if (isset($embedding['__query'])) {
+            $queryText = strtolower(trim($embedding['__query']));
+        }
+
         // Process all documents first
         foreach ($getLineMethod->invoke($this->fileVectorStore, $filePath) as $document) {
             $document = \json_decode((string) $document, true);
@@ -57,9 +76,34 @@ class CustomFileVectorStore implements VectorStoreInterface
             if (empty($document['embedding'])) {
                 throw new VectorStoreException("Document with the following content has no embedding: {$document['content']}");
             }
-            
+
             $dist = VectorSimilarity::cosineDistance($embedding, $document['embedding']);
-            $distances[] = ['dist' => $dist, 'document' => $document];
+            $boost = 0;
+
+            // Boost if query matches page title, section, or metadata
+            if ($queryText) {
+                $title = strtolower($document['metadata']['title'] ?? '');
+                $section = strtolower($document['metadata']['section'] ?? '');
+                $keywords = strtolower($document['metadata']['keywords'] ?? '');
+                $content = strtolower($document['content'] ?? '');
+
+                if ($title && strpos($title, $queryText) !== false) {
+                    $boost += 0.15; // Strong title match
+                }
+                if ($section && strpos($section, $queryText) !== false) {
+                    $boost += 0.10; // Section match
+                }
+                if ($keywords && strpos($keywords, $queryText) !== false) {
+                    $boost += 0.10; // Keyword match
+                }
+                // Optionally boost if content contains exact phrase
+                if ($content && strpos($content, $queryText) !== false) {
+                    $boost += 0.05;
+                }
+            }
+
+            // Apply boost by reducing distance (higher similarity)
+            $distances[] = ['dist' => max(0, $dist - $boost), 'document' => $document];
         }
 
         // Sort by distance (ascending - lower distance = more similar)

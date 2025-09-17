@@ -29,33 +29,34 @@ class RagAgent extends RAG
     {
         // return an AI provider (Anthropic, OpenAI, Ollama, Gemini, etc.)
         return new OpenAI(
-            key: Config::get('katalysis.ai.open_ai_key'),
-            model: Config::get('katalysis.ai.open_ai_model')
+            Config::get('katalysis.ai.open_ai_key'),
+            Config::get('katalysis.ai.open_ai_model')
         );
     }
 
     protected function embeddings(): EmbeddingsProviderInterface
     {
         return new OpenAIEmbeddingsProvider(
-            key: Config::get('katalysis.ai.open_ai_key'),
-            model: 'text-embedding-3-small'
+            Config::get('katalysis.ai.open_ai_key'),
+            'text-embedding-3-small'
         );
     }
     
     protected function vectorStore(): VectorStoreInterface
     {
         return new FileVectorStore(
-            directory: DIR_APPLICATION . '/files/neuron',
-            topK: 2  // Further reduced to prevent token limit issues
+            DIR_APPLICATION . '/files/neuron',
+            2,  // Further reduced to prevent token limit issues
+            'pages'  // Use 'pages' as filename to create pages.store
         );
     }
 
     protected function chatHistory(): \NeuronAI\Chat\History\AbstractChatHistory
     {
         return new FileChatHistory(
-            directory: DIR_APPLICATION . '/files/neuron',
-            key: '1', // The key allow to store different files to separate conversations
-            contextWindow: 10000  // Further reduced to prevent token limit issues
+            DIR_APPLICATION . '/files/neuron',
+            '1', // The key allow to store different files to separate conversations
+            10000  // Further reduced to prevent token limit issues
         );
     }
 

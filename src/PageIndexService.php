@@ -15,12 +15,12 @@ use NeuronAI\RAG\Embeddings\OpenAIEmbeddingsProvider;
 use NeuronAI\RAG\VectorStore\FileVectorStore;
 use Concrete\Core\Support\Facade\Config;
 
-class RagBuildIndex {
+class PageIndexService {
 
     public function clearIndex(): void
     {
-        // Use the correct path for your environment
-        $storeFile = DIR_APPLICATION . '/files/neuron/neuron.store';
+        // Use the correct path for pages vector store
+        $storeFile = DIR_APPLICATION . '/files/neuron/pages.store';
         
         if (file_exists($storeFile)) {
             unlink($storeFile);
@@ -43,12 +43,23 @@ class RagBuildIndex {
                 continue;
             }
 
+            // Try to get meta title, fall back to collection name
+            $metaTitle = '';
+            try {
+                $metaTitleAttr = $r->getAttribute('meta_title');
+                $metaTitle = $metaTitleAttr ?: $r->getCollectionName();
+            } catch (\Exception $e) {
+                $metaTitle = $r->getCollectionName();
+            }
+
             $pages[] = [
-                'title' => $r->getCollectionName(),
+                'title' => $metaTitle, // Now uses meta title if available
+                'collection_name' => $r->getCollectionName(), // Keep original for fallback
                 'description' => $r->getCollectionDescription(),
                 'content' => $content,
                 'link' => $r->getCollectionLink(),
-                'pagetype' => $r->getPageTypeHandle()
+                'pagetype' => $r->getPageTypeHandle(),
+                'page_id' => $r->getCollectionID() // Keep only page_id for live lookups
             ];
         }
         return $pages;
@@ -78,10 +89,12 @@ class RagBuildIndex {
                     }
                     
                     // Add page metadata to document
-                    $document->sourceName = $page['title'];
+                    $document->sourceName = $page['title']; // Now uses meta title
                     $document->sourceType = 'page';
                     $document->addMetadata('url', $page['link']); // Store the page URL in metadata
                     $document->addMetadata('pagetype', $page['pagetype']); // Store the page type in metadata
+                    $document->addMetadata('collection_name', $page['collection_name']); // Store original name as fallback
+                    $document->addMetadata('page_id', $page['page_id']); // Only store page_id for live lookups
                     
                     $document->embedding = $embeddingProvider->embedText($document->content);
                     $vectorStore->addDocument($document);
@@ -108,8 +121,8 @@ class RagBuildIndex {
     public function getEmbeddingProvider(): OpenAIEmbeddingsProvider
     {
         return new OpenAIEmbeddingsProvider(
-            key: Config::get('katalysis.ai.open_ai_key'),
-            model: 'text-embedding-3-small'
+            Config::get('katalysis.ai.open_ai_key'),
+            'text-embedding-3-small'
         );
     }
 
@@ -127,8 +140,9 @@ class RagBuildIndex {
             }
         }
         return new FileVectorStore(
-            directory: $storageDir,
-            topK: $topK
+            $storageDir,
+            $topK,
+            'pages'  // Use 'pages' as filename to create pages.store
         );
     }
 

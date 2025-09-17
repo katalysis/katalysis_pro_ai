@@ -9,11 +9,11 @@ use Concrete\Core\Command\Task\TaskInterface;
 use Concrete\Core\Command\Task\Controller\AbstractController;
 use Concrete\Core\Application\Application;
 
-use KatalysisProAi\Command\BatchBuildRagIndexCommand;
-use KatalysisProAi\Command\BatchBuildRagIndexCommandHandler;
+use KatalysisProAi\Command\BuildPageIndexCommand;
+use KatalysisProAi\Command\BuildPageIndexCommandHandler;
 
 
-class BuildRagIndexController extends AbstractController
+class BuildPageIndexController extends AbstractController
 {
     protected Application $app;
 
@@ -24,27 +24,27 @@ class BuildRagIndexController extends AbstractController
 
     public function getName(): string
     {
-        return t("Build RAG Index");
+        return t("Build Page Index");
     }
 
     public function getDescription(): string
     {
-        return t("Builds the RAG index using batch processing to prevent timeouts on large sites.");
+        return t("Builds vector index for Pages.");
     }
 
     public function getTaskRunner(TaskInterface $task, InputInterface $input): TaskRunnerInterface
     {
-        $command = new BatchBuildRagIndexCommand();
+        $command = new BuildPageIndexCommand();
         
         // Execute the batch preparation command to get the batch
-        $handler = $this->app->make(BatchBuildRagIndexCommandHandler::class);
+        $handler = $this->app->make(BuildPageIndexCommandHandler::class);
         $batch = $handler($command);
         
         return new BatchProcessTaskRunner(
             $task,
             $batch,
             $input,
-            t('Building RAG index with batch processing...')
+            t('Building page index with batch processing...')
         );
     }
 

@@ -2,11 +2,11 @@
 <concrete5-cif version="1.0">
 
     <tasks>
-        <task handle="build_rag_index" package="katalysis_pro_ai"/>
+        <task handle="build_katalysis_pro_index" package="katalysis_pro_ai"/>
     </tasks>
     <tasksets>
         <taskset handle="maintenance">
-            <task handle="build_rag_index"/>
+            <task handle="build_katalysis_pro_index"/>
         </taskset>
     </tasksets>
 

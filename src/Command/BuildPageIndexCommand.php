@@ -4,7 +4,7 @@ namespace KatalysisProAi\Command;
 
 use Concrete\Core\Foundation\Command\Command;
 
-class BatchBuildRagIndexCommand extends Command
+class BuildPageIndexCommand extends Command
 {
     private bool $clearExistingIndex;
 

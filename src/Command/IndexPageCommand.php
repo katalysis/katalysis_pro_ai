@@ -4,7 +4,7 @@ namespace KatalysisProAi\Command;
 
 use Concrete\Core\Foundation\Command\Command;
 
-class IndexSinglePageCommand extends Command
+class IndexPageCommand extends Command
 {
     private int $pageId;
 
