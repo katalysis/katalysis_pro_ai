@@ -438,8 +438,8 @@ class SearchSettings extends DashboardPageController
                 ]
             ];
             
-            // Log the search
-            $this->logSearch($query, $blockId);
+            // Log the search with comprehensive results
+            $this->logSearch($query, $blockId, $aiResponse, $intent, $results);
             
             return $this->app->make(ResponseFactory::class)->json($results);
             
@@ -2027,28 +2027,121 @@ class SearchSettings extends DashboardPageController
     
 
     
-    private function logSearch($query, $blockId)
+    private function logSearch($query, $blockId, $aiResponse = '', $intent = [], $fullResults = [])
     {
         try {
-            // Simple file-based logging for now - use DIR_APPLICATION constant
-            $logDir = DIR_APPLICATION . '/files/katalysis_search_logs';
+            // Create Search entity record for comprehensive tracking
+            $db = Database::get();
+            $entityManager = $db->getEntityManager();
+            $search = new \KatalysisProAi\Entity\Search();
             
-            if (!is_dir($logDir)) {
-                mkdir($logDir, 0755, true);
-            }
+            // Core search information
+            $search->setQuery($query);
+            $search->setStarted(new \DateTime());
+            $search->setCreatedDate(new \DateTime());
             
-            $logFile = $logDir . '/searches_' . date('Y-m') . '.log';
-            $logEntry = [
-                'timestamp' => date('Y-m-d H:i:s'),
-                'query' => $query,
-                'block_id' => $blockId,
-                'ip' => $_SERVER['REMOTE_ADDR'] ?? 'unknown'
+            // Create comprehensive result summary including intent analysis and AI response
+            $resultSummary = [
+                'ai_response' => $aiResponse,
+                'intent_analysis' => $intent,
+                'processing_summary' => [
+                    'query' => $query,
+                    'timestamp' => date('Y-m-d H:i:s'),
+                    'processing_time_ms' => $fullResults['processing_time'] ?? 0,
+                    'optimization_approach' => $fullResults['debug']['approach'] ?? 'standard',
+                ]
             ];
             
-            file_put_contents($logFile, json_encode($logEntry) . "\n", FILE_APPEND | LOCK_EX);
+            // Add counts and summaries if available
+            if (!empty($fullResults)) {
+                $resultSummary['results_summary'] = [
+                    'pages_found' => count($fullResults['pages'] ?? []),
+                    'specialists_found' => count($fullResults['specialists'] ?? []),
+                    'reviews_found' => count($fullResults['reviews'] ?? []),
+                    'places_found' => count($fullResults['places'] ?? []),
+                ];
+                
+                // Add debug information if available
+                if (!empty($fullResults['debug'])) {
+                    $resultSummary['debug_summary'] = [
+                        'intent_type' => $fullResults['debug']['intent_analysis']['intent_type'] ?? 'unknown',
+                        'service_area' => $fullResults['debug']['intent_analysis']['service_area'] ?? 'none',
+                        'confidence' => $fullResults['debug']['intent_analysis']['confidence'] ?? 0,
+                        'processing_time_ms' => $fullResults['debug']['processing_time_ms'] ?? 0,
+                    ];
+                }
+            }
+            
+            // Store as JSON in resultSummary field
+            $search->setResultSummary(json_encode($resultSummary, JSON_PRETTY_PRINT));
+            
+            // Page context information
+            $launchPageUrl = $this->request->request->get('launch_page_url', '');
+            $launchPageTitle = $this->request->request->get('launch_page_title', '');
+            $launchPageType = $this->request->request->get('launch_page_type', '');
+            
+            if ($launchPageUrl) {
+                $search->setLaunchPageUrl($launchPageUrl);
+            }
+            if ($launchPageTitle) {
+                $search->setLaunchPageTitle($launchPageTitle);
+            }
+            if ($launchPageType) {
+                $search->setLaunchPageType($launchPageType);
+            }
+            
+            // UTM tracking parameters
+            $search->setUtmSource($this->request->request->get('utm_source', ''));
+            $search->setUtmMedium($this->request->request->get('utm_medium', ''));
+            $search->setUtmCampaign($this->request->request->get('utm_campaign', ''));
+            $search->setUtmTerm($this->request->request->get('utm_term', ''));
+            $search->setUtmContent($this->request->request->get('utm_content', ''));
+            
+            // Session and user tracking
+            $user = new \Concrete\Core\User\User();
+            if ($user->isRegistered()) {
+                $search->setCreatedBy($user->getUserID());
+            }
+            
+            // Session ID and technical information
+            $search->setSessionId(session_id());
+            $search->setLocation($_SERVER['REMOTE_ADDR'] ?? 'unknown');
+            
+            // LLM model information (could be enhanced based on config)
+            $search->setLlm('OpenAI GPT-4'); // Default model
+            
+            // Save the search entity
+            $entityManager->persist($search);
+            $entityManager->flush();
+            
+            error_log("Search logged to database: ID {$search->getId()}, Query: {$query}, Response Length: " . strlen($aiResponse));
+            
         } catch (\Exception $e) {
-            error_log('Search logging failed: ' . $e->getMessage());
-            // Continue execution even if logging fails
+            error_log('Database search logging failed: ' . $e->getMessage());
+            
+            // Fallback to file-based logging if database logging fails
+            try {
+                $logDir = DIR_APPLICATION . '/files/katalysis_search_logs';
+                
+                if (!is_dir($logDir)) {
+                    mkdir($logDir, 0755, true);
+                }
+                
+                $logFile = $logDir . '/searches_' . date('Y-m') . '.log';
+                $logEntry = [
+                    'timestamp' => date('Y-m-d H:i:s'),
+                    'query' => $query,
+                    'block_id' => $blockId,
+                    'ip' => $_SERVER['REMOTE_ADDR'] ?? 'unknown',
+                    'ai_response_length' => strlen($aiResponse),
+                    'intent_type' => $intent['intent_type'] ?? 'unknown',
+                    'error' => 'DB logging failed: ' . $e->getMessage()
+                ];
+                
+                file_put_contents($logFile, json_encode($logEntry) . "\n", FILE_APPEND | LOCK_EX);
+            } catch (\Exception $fileLogException) {
+                error_log('File fallback logging also failed: ' . $fileLogException->getMessage());
+            }
         }
     }
 

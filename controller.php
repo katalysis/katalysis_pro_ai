@@ -77,6 +77,10 @@ class Controller extends Package
         $chatsServiceProvider = $this->app->make(\KatalysisProAi\ChatsServiceProvider::class);
         $chatsServiceProvider->register();
 
+        // Register the searches service provider
+        $searchesServiceProvider = $this->app->make(\KatalysisProAi\SearchesServiceProvider::class);
+        $searchesServiceProvider->register();
+
         $version = $this->getPackageVersion();
 
         $al = AssetList::getInstance();

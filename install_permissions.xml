@@ -35,5 +35,22 @@
 				<group name="Administrators" description="" />
 			</access>
 		</permissionkey>
+		<permissionkey handle="create_katalysis_searches_entries" name="Create Katalysis Searches Entries" description="" package="katalysis_pro_ai" category="admin">
+			<access>
+				<group name="Administrators" description="" />
+			</access>
+		</permissionkey>
+		<permissionkey handle="read_katalysis_searches" name="Read Katalysis Searches" description="" package="katalysis_pro_ai" category="admin">
+		</permissionkey>
+		<permissionkey handle="update_katalysis_searches" name="Update Katalysis Searches" description="" package="katalysis_pro_ai" category="admin">
+			<access>
+				<group name="Administrators" description="" />
+			</access>
+		</permissionkey>
+		<permissionkey handle="delete_katalysis_searches" name="Delete Katalysis Searches" description="" package="katalysis_pro_ai" category="admin">
+			<access>
+				<group name="Administrators" description="" />
+			</access>
+		</permissionkey>
 	</permissionkeys>
 </concrete5-cif>

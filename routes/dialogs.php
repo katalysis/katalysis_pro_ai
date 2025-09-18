@@ -7,10 +7,14 @@ defined('C5_EXECUTE') or die('Access Denied.');
  * @var Concrete\Core\Routing\Router $router
  */
 
-/*
- * Base path: /ccm/system/dialogs/chats
- * Namespace: Concrete\Package\KatalysisAiChatBot\Controller\Dialog\Chats
- */
+// Register chats dialog routes
+$chatsGroup = $router->buildGroup();
+$chatsGroup->setNamespace('Concrete\Package\KatalysisProAi\Controller\Dialog\Chats');
+$chatsGroup->setPrefix('/chats');
+$chatsGroup->routes('dialogs/chats');
 
-$router->all('/bulk/delete', 'Bulk\Delete::view');
-$router->all('/bulk/delete/submit', 'Bulk\Delete::submit'); 
+// Register searches dialog routes
+$searchesGroup = $router->buildGroup();
+$searchesGroup->setNamespace('Concrete\Package\KatalysisProAi\Controller\Dialog\Searches');
+$searchesGroup->setPrefix('/searches');
+$searchesGroup->routes('dialogs/searches'); 

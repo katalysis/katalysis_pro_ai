@@ -593,6 +593,19 @@
             formData.append('query', query);
             formData.append('block_id', '<?php echo $blockId ?>');
             // formData.append('async_mode', 'true'); // DISABLED: Use synchronous mode for comprehensive responses
+            
+            // Add page context information for enhanced search logging
+            formData.append('launch_page_url', window.location.href);
+            formData.append('launch_page_title', document.title);
+            formData.append('launch_page_type', '<?php echo addslashes(\Concrete\Core\Page\Page::getCurrentPage()->getPageTypeName()) ?>');
+            
+            // Add UTM and session tracking
+            const urlParams = new URLSearchParams(window.location.search);
+            formData.append('utm_source', urlParams.get('utm_source') || '');
+            formData.append('utm_medium', urlParams.get('utm_medium') || '');
+            formData.append('utm_campaign', urlParams.get('utm_campaign') || '');
+            formData.append('utm_term', urlParams.get('utm_term') || '');
+            formData.append('utm_content', urlParams.get('utm_content') || '');
 
             <?php if ($displayMode === 'redirect' && $resultsPageId): ?>
                 // Redirect to results page
