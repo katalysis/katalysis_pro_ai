@@ -14,39 +14,42 @@ class BuildPageIndexCommandHandler
     public function __invoke(BuildPageIndexCommand $command)
     {
         try {
-            Log::addInfo('Starting batch page index rebuild preparation...');
+            $selectedStores = $command->getSelectedStores();
+            $storeInfo = empty($selectedStores) ? 'all stores' : implode(', ', $selectedStores);
+            
+            Log::addInfo("Starting batch page index rebuild preparation for: {$storeInfo}");
             
             $pageIndexService = new PageIndexService();
             
-            // Clear existing index if requested
+            // Clear existing indexes if requested
             if ($command->shouldClearExistingIndex()) {
-                Log::addInfo('Clearing existing index...');
-                $pageIndexService->clearIndex();
+                Log::addInfo('Clearing existing indexes...');
+                $pageIndexService->clearIndex($selectedStores); // Pass selected stores to clear
             }
             
-            // Get all pages to index
-            $ipl = new PageList();
-            $ipl->setSiteTreeToAll();
-            $pages = $ipl->getResults();
+            // Get pages organized by store type
+            $pagesByType = $pageIndexService->buildIndex($selectedStores);
             
-            $validPageIds = [];
-            foreach ($pages as $page) {
-                // Pre-filter pages to avoid processing empty content in batch
-                $content = $page->getPageIndexContent();
-                if ($this->isValidContent($content)) {
-                    $validPageIds[] = $page->getCollectionID();
+            // Create batch with individual page indexing commands for each relevant page
+            $batch = Batch::create();
+            $totalValidPages = 0;
+            
+            foreach ($pagesByType as $storeType => $pages) {
+                Log::addInfo("Store '{$storeType}': Found " . count($pages) . " valid pages");
+                
+                foreach ($pages as $page) {
+                    // Create IndexPageCommand with store type info
+                    $batch->add(new IndexPageCommand($page['page_id'], $storeType));
+                    $totalValidPages++;
                 }
             }
             
-            Log::addInfo('Prepared ' . count($validPageIds) . ' valid pages for batch indexing out of ' . count($pages) . ' total pages.');
-            
-            // Create batch with individual page indexing commands
-            $batch = Batch::create();
-            foreach ($validPageIds as $pageId) {
-                $batch->add(new IndexPageCommand($pageId));
+            if ($totalValidPages === 0) {
+                Log::addWarning('No valid pages found for selected store types.');
+                return Batch::create(); // Return empty batch
             }
             
-            Log::addInfo('Batch preparation completed. Ready to process ' . count($validPageIds) . ' pages.');
+            Log::addInfo("Batch preparation completed. Ready to process {$totalValidPages} pages across " . count($pagesByType) . " store types.");
             
             return $batch;
             
