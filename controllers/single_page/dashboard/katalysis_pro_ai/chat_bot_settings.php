@@ -678,7 +678,7 @@ EXAMPLES OF INCORRECT RESPONSES:
                     $responseContent = trim($responseContent);
                 }
 
-                // Get relevant documents for metadata links using the parent class method
+                // Get relevant docsuments for metadata links using the parent class method
                 try {
                     $relevantDocs = $ragAgent->retrieveDocuments(new UserMessage($message));
                 } catch (\Exception $e) {

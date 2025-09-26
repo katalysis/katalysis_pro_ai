@@ -46,7 +46,7 @@ class RagAgent extends RAG
     {
         return new FileVectorStore(
             DIR_APPLICATION . '/files/neuron',
-            2,  // Further reduced to prevent token limit issues
+            15,  // Increased for better document diversity
             'pages'  // Use 'pages' as filename to create pages.store
         );
     }
@@ -56,7 +56,7 @@ class RagAgent extends RAG
         return new FileChatHistory(
             DIR_APPLICATION . '/files/neuron',
             '1', // The key allow to store different files to separate conversations
-            10000  // Further reduced to prevent token limit issues
+            2000  // Reduced for better performance
         );
     }
 

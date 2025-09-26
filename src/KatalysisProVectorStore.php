@@ -80,27 +80,7 @@ class KatalysisProVectorStore implements VectorStoreInterface
             $dist = VectorSimilarity::cosineDistance($embedding, $document['embedding']);
             $boost = 0;
 
-            // Boost if query matches page title, section, or metadata
-            if ($queryText) {
-                $title = strtolower($document['metadata']['title'] ?? '');
-                $section = strtolower($document['metadata']['section'] ?? '');
-                $keywords = strtolower($document['metadata']['keywords'] ?? '');
-                $content = strtolower($document['content'] ?? '');
-
-                if ($title && strpos($title, $queryText) !== false) {
-                    $boost += 0.15; // Strong title match
-                }
-                if ($section && strpos($section, $queryText) !== false) {
-                    $boost += 0.10; // Section match
-                }
-                if ($keywords && strpos($keywords, $queryText) !== false) {
-                    $boost += 0.10; // Keyword match
-                }
-                // Optionally boost if content contains exact phrase
-                if ($content && strpos($content, $queryText) !== false) {
-                    $boost += 0.05;
-                }
-            }
+            // Boost logic removed - using pure vector similarity for natural ranking
 
             // Apply boost by reducing distance (higher similarity)
             $distances[] = ['dist' => max(0, $dist - $boost), 'document' => $document];

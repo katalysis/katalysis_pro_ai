@@ -7,26 +7,32 @@ namespace Concrete\Package\KatalysisProAi\Controller\SinglePage\Dashboard\Kataly
 
 use Concrete\Core\Page\Controller\DashboardPageController;
 use Concrete\Core\Http\ResponseFactory;
-use Concrete\Core\Config\Repository\Repository;
+use Config;
 use Concrete\Core\Page\Page;
+use Concrete\Core\Page\Type\Type as PageType;
 use Concrete\Core\Attribute\Key\CollectionKey;
 use PageList;
 use Core;
 use Database;
 use KatalysisProAi\RagAgent;
 use \NeuronAI\Chat\Messages\UserMessage;
-use Config;
+use \NeuronAI\Chat\Messages\SystemMessage;
+use \NeuronAI\Providers\OpenAI\OpenAI;
 use \Concrete\Package\KatalysisPro\Src\KatalysisPro\People\PeopleList;
 use \Concrete\Package\KatalysisPro\Src\KatalysisPro\Reviews\ReviewList;
+use \Concrete\Package\KatalysisPro\Src\KatalysisPro\Places\PlaceList;
+use \Concrete\Package\KatalysisPro\Src\KatalysisPro\Places\Place;
 use \Concrete\Core\Tree\Type\Topic as TopicTree;
+use KatalysisProAi\ActionService;
 
 class SearchSettings extends DashboardPageController
 {
     public function view()
     {
         // Get current settings from config
-        $maxResults = Config::get('katalysis.search.max_results', 8);
-        $resultLength = Config::get('katalysis.search.result_length', 'medium');
+        $config = $this->app->make('config');
+        $maxResults = $config->get('katalysis.search.max_results', 8);
+        $resultLength = $config->get('katalysis.search.result_length', 'medium');
         $includePageLinks = Config::get('katalysis.search.include_page_links', true);
         $showSnippets = Config::get('katalysis.search.show_snippets', true);
         
@@ -42,8 +48,28 @@ class SearchSettings extends DashboardPageController
         $enablePlaces = Config::get('katalysis.search.enable_places', true);
         $maxPlaces = Config::get('katalysis.search.max_places', 3);
         
-        // Get advanced AI prompts (split into hardcoded structure + editable response format)
-        $responseFormatInstructions = Config::get('katalysis.search.response_format_instructions', $this->getDefaultResponseFormatInstructions());
+        // Get AI document selection settings
+        $useAISelection = Config::get('katalysis.search.use_ai_document_selection', false);
+        $maxSelectedDocuments = Config::get('katalysis.search.max_selected_documents', 6);
+        $candidateDocumentsCount = Config::get('katalysis.search.candidate_documents_count', 15);
+        
+        // Get advanced AI prompts (new section-based system)
+        $responseSections = Config::get('katalysis.search.response_sections', '');
+        $responseGuidelines = Config::get('katalysis.search.response_guidelines', '');
+        
+        // If no sections exist, initialize with defaults
+        if (empty($responseSections)) {
+            $responseSections = json_encode($this->getDefaultSections());
+            $responseGuidelines = $this->getDefaultGuidelines();
+        }
+        
+        // Legacy support - check for old format and suggest migration
+        $hasOldFormat = !empty(Config::get('katalysis.search.response_format_instructions', ''));
+        
+        // Pass section data to view
+        $this->set('responseSections', $responseSections);
+        $this->set('responseGuidelines', $responseGuidelines);
+        $this->set('hasOldFormat', $hasOldFormat);
         
         // Get known false positives
         $knownFalsePositives = Config::get('katalysis.search.known_false_positives', $this->getDefaultKnownFalsePositives());
@@ -71,14 +97,17 @@ class SearchSettings extends DashboardPageController
         $this->set('maxSpecialists', $maxSpecialists);  
         $this->set('enableReviews', $enableReviews);
         $this->set('maxReviews', $maxReviews);
-        $this->set('responseFormatInstructions', $responseFormatInstructions);
+        $this->set('useAISelection', $useAISelection);
+        $this->set('maxSelectedDocuments', $maxSelectedDocuments);
+        $this->set('candidateDocumentsCount', $candidateDocumentsCount);
         $this->set('knownFalsePositives', $knownFalsePositives);
         $this->set('enableDebugPanel', $enableDebugPanel);
         $this->set('searchStats', $searchStats);
         $this->set('popularTerms', $popularTerms);
         
-        // Set default values for comparison (only for AI-configurable prompts)
-        $this->set('defaultResponseFormatInstructions', $this->getDefaultResponseFormatInstructions());
+        // Set default values for comparison (new section-based system)
+        $this->set('defaultResponseSections', json_encode($this->getDefaultSections()));
+        $this->set('defaultResponseGuidelines', $this->getDefaultGuidelines());
         $this->set('defaultKnownFalsePositives', $this->getDefaultKnownFalsePositives());
         
         // Set default values for statistics (since we removed the display)
@@ -99,7 +128,7 @@ class SearchSettings extends DashboardPageController
                "    \"intent_type\": \"string (information, help, contact, booking, pricing, comparison, complaint, urgent, question)\",\n" .
                "    \"confidence\": \"number (0.0-1.0)\",\n" .
                "    \"service_area\": \"string or null (specific service mentioned)\",\n" .
-               "    \"specialism_id\": \"number or null (matching specialism ID if applicable)\",\n" .
+               "    \"specialism_id\": \"number or null (extract the ID number from specialisms list if service matches, e.g. if query matches 'Personal Injury (ID: 123)', return 123)\",\n" .
                "    \"urgency\": \"string (low, medium, high)\",\n" .
                "    \"location_mentioned\": \"string or null\",\n" .
                "    \"key_phrases\": [\"array of important phrases from query\"]\n" .
@@ -110,22 +139,220 @@ class SearchSettings extends DashboardPageController
     }
 
     /**
-     * Get default response format instructions (user-editable)
+     * Get response format instructions with flexible section management
+     * Uses JSON-based section definitions for full administrative control
      */
+    private function getResponseFormatInstructions(): string
+    {
+        // Get saved response sections (JSON format)
+        $savedSections = Config::get('katalysis.search.response_sections', '');
+        $responseGuidelines = Config::get('katalysis.search.response_guidelines', '');
+        
+        // If we have JSON-based sections, use them
+        if (!empty($savedSections)) {
+            $sections = json_decode($savedSections, true);
+            if (json_last_error() === JSON_ERROR_NONE && is_array($sections)) {
+                return $this->buildResponseInstructionsFromSections($sections, $responseGuidelines);
+            }
+        }
+        
+        // Check for old text-based format and migrate to sections
+        $oldFormat = Config::get('katalysis.search.response_format_instructions', '');
+        if (!empty($oldFormat)) {
+            $migratedSections = $this->migrateOldFormatToSections($oldFormat);
+            if (!empty($migratedSections)) {
+                // Save migrated sections
+                Config::save('katalysis.search.response_sections', json_encode($migratedSections));
+                Config::save('katalysis.search.response_guidelines', $this->extractGuidelinesFromOldFormat($oldFormat));
+                // Clear old format
+                Config::save('katalysis.search.response_format_instructions', '');
+                return $this->buildResponseInstructionsFromSections($migratedSections, $this->extractGuidelinesFromOldFormat($oldFormat));
+            }
+        }
+        
+        // Force use of default sections if nothing exists
+        $defaultSections = $this->getDefaultSections();
+        $defaultGuidelines = $this->getDefaultGuidelines();
+        
+        // Save defaults to config to ensure they persist
+        Config::save('katalysis.search.response_sections', json_encode($defaultSections));
+        Config::save('katalysis.search.response_guidelines', $defaultGuidelines);
+        Config::save('katalysis.search.response_format_instructions', ''); // Clear any old format
+        
+        return $this->buildResponseInstructionsFromSections($defaultSections, $defaultGuidelines);
+    }
+    
+    /**
+     * Build response instructions from section definitions
+     */
+    private function buildResponseInstructionsFromSections($sections, $guidelines = '')
+    {
+        $instructions = "RESPONSE STRUCTURE - Use this EXACT format:\n";
+        
+        $enabledSections = 0;
+        $sectionInstructions = [];
+        
+        foreach ($sections as $section) {
+            // Only include enabled sections
+            if (!isset($section['enabled']) || $section['enabled'] === true) {
+                $sectionName = strtoupper($section['name']);
+                $description = $section['description'] ?? 'Provide relevant content';
+                $showHeading = $section['show_heading'] ?? true;
+                $sentenceCount = $section['sentence_count'] ?? 2;
+                
+                if ($showHeading) {
+                    $sectionInstructions[] = "{$sectionName}: [{$description}] - MUST be exactly {$sentenceCount} sentences";
+                } else {
+                    $sectionInstructions[] = "[{$description}] - MUST be exactly {$sentenceCount} sentences - No heading required";
+                }
+                
+                $enabledSections++;
+            }
+        }
+        
+        $instructions .= implode("\n", $sectionInstructions);
+        
+        $instructions .= "\n\nRESPONSE GUIDELINES:\n";
+        
+        if (!empty($guidelines)) {
+            $instructions .= $guidelines;
+        } else {
+            $instructions .= $this->getDefaultGuidelines();
+        }
+        
+        // Add strict section enforcement - return to text format that works
+        $instructions .= "\n\nCRITICAL FORMATTING REQUIREMENTS:";
+        $instructions .= "\n- Use EXACTLY the {$enabledSections} sections shown above";
+        $instructions .= "\n- Each section must follow the specified format";
+        $instructions .= "\n- MANDATORY: Each section must contain exactly the specified number of sentences - never more, never less";
+        $instructions .= "\n- If a section requires 2 sentences, write exactly 2 complete sentences, not 1 or 3";
+        $instructions .= "\n- Do NOT add sections like 'Related Services', 'Additional Information', or any others";
+        $instructions .= "\n- Follow the sentence count for each section precisely";
+        $instructions .= "\n- Use clear section headings as specified";
+        $instructions .= "\n- Keep content concise and professional";
+        $instructions .= "\n\nSENTENCE COUNT ENFORCEMENT:";
+        $instructions .= "\n- COUNT YOUR SENTENCES: Before finalizing each section, literally count the sentences to ensure you have the exact required number";
+        $instructions .= "\n- SENTENCE DEFINITION: A sentence ends with a period (.), exclamation mark (!), or question mark (?)";
+        $instructions .= "\n- NO EXCEPTIONS: Even if you have more information to share, stick to the exact sentence count specified";
+        $instructions .= "\n- QUALITY OVER QUANTITY: Make each sentence count by including the most important information";
+        
+        
+        return $instructions;
+    }
+    
+    /**
+     * Migrate old format to section-based system
+     */
+    private function migrateOldFormatToSections($oldFormat)
+    {
+        $sections = [];
+        
+        // Extract sections from old format using regex
+        if (preg_match_all('/^([A-Z][A-Z\s]+):\s*\[([^\]]+)\]/m', $oldFormat, $matches, PREG_SET_ORDER)) {
+            foreach ($matches as $match) {
+                $sectionName = trim($match[1]);
+                $description = trim($match[2]);
+                
+                // Skip "RELATED SERVICES" during migration
+                if (strtoupper($sectionName) === 'RELATED SERVICES') {
+                    continue;
+                }
+                
+                $sections[] = [
+                    'name' => $sectionName,
+                    'description' => $description,
+                    'enabled' => true,
+                    'show_heading' => true,
+                    'sentence_count' => 2
+                ];
+            }
+        }
+        
+        // If no sections found, return default sections
+        if (empty($sections)) {
+            return $this->getDefaultSections();
+        }
+        
+        return $sections;
+    }
+    
+    /**
+     * Extract guidelines from old format
+     */
+    private function extractGuidelinesFromOldFormat($oldFormat)
+    {
+        // Extract everything after "RESPONSE GUIDELINES:"
+        if (preg_match('/RESPONSE GUIDELINES:\s*\n(.+)$/s', $oldFormat, $matches)) {
+            return trim($matches[1]);
+        }
+        
+        return $this->getDefaultGuidelines();
+    }
+    
+    /**
+     * Get default response sections
+     */
+    private function getDefaultSections()
+    {
+        return [
+            [
+                'name' => 'DIRECT ANSWER',
+                'description' => 'Direct answer to their specific question or need',
+                'enabled' => true,
+                'show_heading' => false,
+                'sentence_count' => 2
+            ],
+            [
+                'name' => 'OUR CAPABILITIES',
+                'description' => 'How our expertise specifically helps',
+                'enabled' => true,
+                'show_heading' => true,
+                'sentence_count' => 2
+            ],
+            [
+                'name' => 'WHY CHOOSE US',
+                'description' => 'Benefits of choosing our firm, unique value proposition',
+                'enabled' => true,
+                'show_heading' => true,
+                'sentence_count' => 2
+            ],
+            [
+                'name' => 'PRACTICAL GUIDANCE',
+                'description' => 'Next steps, what to prepare, or actions to take',
+                'enabled' => true,
+                'show_heading' => true,
+                'sentence_count' => 2
+            ]
+        ];
+    }
+    
+    /**
+     * Get default guidelines
+     */
+    private function getDefaultGuidelines()
+    {
+        return "- Use professional, reassuring, and confident tone\n" .
+               "- Be specific about our legal services and expertise\n" .
+               "- Include practical next steps and actionable advice\n" .
+               "- Highlight our unique strengths and experience\n" .
+               "- CRITICAL: Each section MUST contain exactly 2 complete sentences - never just 1 sentence\n" .
+               "- Write 2 full sentences for each section to provide comprehensive information\n" .
+               "- End with a call to action encouraging contact";
+    }
     private function getDefaultResponseFormatInstructions(): string
     {
         return "RESPONSE STRUCTURE - Use this exact format:\n" .
                "DIRECT ANSWER: [Direct answer to their specific question or need]\n" .
-               "RELATED SERVICES: [Additional relevant services we offer]\n" .
                "OUR CAPABILITIES: [How our expertise specifically helps]\n" .
-               "PRACTICAL GUIDANCE: [Next steps, what to prepare, or actions to take]\n" .
-               "WHY CHOOSE US: [Benefits of choosing our firm, unique value proposition]\n\n" .
+               "WHY CHOOSE US: [Benefits of choosing our firm, unique value proposition]\n" .
+               "PRACTICAL GUIDANCE: [Next steps, what to prepare, or actions to take]\n\n" .
                "RESPONSE GUIDELINES:\n" .
                "- Use professional, reassuring, and confident tone\n" .
                "- Be specific about our legal services and expertise\n" .
                "- Include practical next steps and actionable advice\n" .
                "- Highlight our unique strengths and experience\n" .
-               "- Each section should be 1-2 sentences, clear and informative\n" .
+               "- CRITICAL: Each section MUST contain exactly 2 complete sentences. Never use just 1 sentence.\n" .
+               "- Write 2 full sentences for each section to provide comprehensive information\n" .
                "- End with a call to action encouraging contact";
     }
 
@@ -146,6 +373,144 @@ class SearchSettings extends DashboardPageController
     }
 
     /**
+     * Debug endpoint to check current response format configuration
+     */
+    public function debug_response_format()
+    {
+        // Get current configuration
+        $savedSections = Config::get('katalysis.search.response_sections', '');
+        $responseGuidelines = Config::get('katalysis.search.response_guidelines', '');
+        $oldFormat = Config::get('katalysis.search.response_format_instructions', '');
+        
+        // Get what getResponseFormatInstructions() actually returns
+        $currentInstructions = $this->getResponseFormatInstructions();
+        
+        $debug = [
+            'current_time' => date('Y-m-d H:i:s'),
+            'config_check' => [
+                'response_sections_exists' => !empty($savedSections),
+                'response_sections_length' => strlen($savedSections),
+                'response_guidelines_exists' => !empty($responseGuidelines),
+                'old_format_exists' => !empty($oldFormat),
+                'old_format_length' => strlen($oldFormat)
+            ],
+            'section_data' => [
+                'raw_sections' => $savedSections,
+                'parsed_sections' => !empty($savedSections) ? json_decode($savedSections, true) : null,
+                'json_parse_error' => json_last_error_msg()
+            ],
+            'current_instructions' => $currentInstructions,
+            'default_sections' => $this->getDefaultSections(),
+            'default_guidelines' => $this->getDefaultGuidelines()
+        ];
+        
+        return $this->app->make(ResponseFactory::class)->json($debug);
+    }
+
+    /**
+     * Debug endpoint to check the exact prompt being sent to AI
+     */
+    public function debug_prompt()
+    {
+        try {
+            // Simulate the exact same prompt construction as in perform_search
+            $query = "I need help with a house sale";
+            
+            // Get specialisms for intent analysis
+            $allSpecialisms = $this->getSpecialisms();
+            if (empty($allSpecialisms)) {
+                $specialismsList = "No specific specialisms available";
+            } else {
+                // Build specialisms list with both names and IDs for AI mapping
+                $specialismsWithIds = array_map(function($spec) {
+                    return $spec['treeNodeName'] . " (ID: " . $spec['treeNodeID'] . ")";
+                }, $allSpecialisms);
+                $specialismsList = "Available legal specialisms: " . implode(', ', $specialismsWithIds);
+            }
+            
+            // Get configurable response format instructions with automatic updates
+            $responseFormatInstructions = $this->getResponseFormatInstructions();
+            
+            // Get base intent analysis prompt
+            $baseIntentPrompt = $this->getDefaultIntentAnalysisPrompt();
+            
+            // Always use the configured format (either custom or updated default)
+            $intentAnalysisPrompt = $this->getFullIntentAnalysisPrompt($responseFormatInstructions);
+            
+            // Get available actions for the prompt
+            $db = Database::get();
+            $entityManager = $db->getEntityManager();
+            $actionService = new ActionService($entityManager);
+            $actionsForPrompt = $actionService->getActionsForPrompt();
+            
+            // Use original query directly - no enhancement needed for legal content
+            
+            // COMBINED PROMPT: Intent analysis + response generation in single AI call
+            $combinedPrompt = "LEGAL QUERY: \"$query\"\n\n" .
+                "ORIGINAL QUERY: \"$query\"\n\n" .
+                "$specialismsList\n\n" .
+                "$actionsForPrompt\n\n" .
+                $intentAnalysisPrompt;
+            
+            return $this->app->make(ResponseFactory::class)->json([
+                'success' => true,
+                'debug_info' => [
+                    'query' => $query,
+                    'specialisms_list' => $specialismsList,
+                    'actions_for_prompt' => $actionsForPrompt,
+                    'response_format_instructions' => $responseFormatInstructions,
+                    'full_combined_prompt' => $combinedPrompt,
+                    'prompt_length' => strlen($combinedPrompt),
+                    'prompt_sections' => [
+                        'legal_query_section' => strlen("LEGAL QUERY: \"$query\"\n\n"),
+                        'original_query_section' => strlen("ORIGINAL QUERY: \"$query\"\n\n"),
+                        'specialisms_section' => strlen("$specialismsList\n\n"),
+                        'actions_section' => strlen("$actionsForPrompt\n\n"),
+                        'intent_prompt_section' => strlen($intentAnalysisPrompt)
+                    ]
+                ]
+            ]);
+            
+        } catch (\Exception $e) {
+            return $this->app->make(ResponseFactory::class)->json([
+                'success' => false,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+        }
+    }
+    
+    public function debug_work_accident()
+    {
+        header('Content-Type: text/plain');
+        echo "=== Work Accident Pages Debug ===\n\n";
+        $this->debugWorkAccidentPages();
+        exit;
+    }
+
+    /**
+     * Force migration endpoint for testing
+     */
+    public function force_migration()
+    {
+        // Clear all existing config
+        Config::save('katalysis.search.response_sections', '');
+        Config::save('katalysis.search.response_guidelines', '');
+        Config::save('katalysis.search.response_format_instructions', '');
+        
+        // Force regeneration with defaults
+        $instructions = $this->getResponseFormatInstructions();
+        
+        return $this->app->make(ResponseFactory::class)->json([
+            'success' => true,
+            'message' => 'Migration forced - using default 4-section structure',
+            'instructions' => $instructions,
+            'sections_saved' => Config::get('katalysis.search.response_sections', ''),
+            'guidelines_saved' => Config::get('katalysis.search.response_guidelines', '')
+        ]);
+    }
+
+    /**
      * Get default known false positives
      */
     private function getDefaultKnownFalsePositives(): string
@@ -158,7 +523,22 @@ class SearchSettings extends DashboardPageController
     }
 
     /**
-     * Get default response format instructions via AJAX
+     * Get default response sections via AJAX
+     */
+    public function get_default_response_sections()
+    {
+        if (!$this->token->validate('save_search_settings')) {
+            return new JsonResponse(['error' => $this->token->getErrorMessage()], 400);
+        }
+        
+        return new JsonResponse([
+            'sections' => $this->getDefaultSections(),
+            'guidelines' => $this->getDefaultGuidelines()
+        ]);
+    }
+
+    /**
+     * Get default response format instructions via AJAX (legacy support)
      */
     public function get_default_response_format_instructions()
     {
@@ -206,8 +586,30 @@ class SearchSettings extends DashboardPageController
         Config::save('katalysis.search.enable_reviews', !empty($data['enable_reviews']));
         Config::save('katalysis.search.max_reviews', (int)($data['max_reviews'] ?? 3));
 
-        // Save advanced AI prompts
-        Config::save('katalysis.search.response_format_instructions', $data['response_format_instructions'] ?? '');
+        // Save AI document selection settings
+        Config::save('katalysis.search.use_ai_document_selection', !empty($data['use_ai_document_selection']));
+        Config::save('katalysis.search.max_selected_documents', (int)($data['max_selected_documents'] ?? 6));
+        Config::save('katalysis.search.candidate_documents_count', (int)($data['candidate_documents_count'] ?? 15));
+
+        // Save AI response configuration (new section-based system)
+        if (isset($data['response_sections']) && !empty($data['response_sections'])) {
+            // Validate JSON format for sections
+            $sections = json_decode($data['response_sections'], true);
+            if (json_last_error() === JSON_ERROR_NONE && is_array($sections)) {
+                Config::save('katalysis.search.response_sections', $data['response_sections']);
+            } else {
+                $this->error->add(t('Response sections must be valid JSON format.'));
+            }
+        } else {
+            // If no sections provided, ensure we have defaults
+            Config::save('katalysis.search.response_sections', json_encode($this->getDefaultSections()));
+        }
+        
+        // Save response guidelines separately
+        Config::save('katalysis.search.response_guidelines', $data['response_guidelines'] ?? $this->getDefaultGuidelines());
+        
+        // Clear old format instructions when using new system
+        Config::save('katalysis.search.response_format_instructions', '');
         
         // Save known false positives (validate JSON format)
         $knownFalsePositivesJson = $data['known_false_positives'] ?? '';
@@ -256,7 +658,8 @@ class SearchSettings extends DashboardPageController
         }
 
         try {
-            // Get search settings
+            // Get search settings from config
+            $candidateDocumentsCount = Config::get('katalysis.search.candidate_documents_count', 15);
             $maxResults = Config::get('katalysis.search.max_results', 8);
             $resultLength = Config::get('katalysis.search.result_length', 'medium');
             $includePageLinks = Config::get('katalysis.search.include_page_links', true);
@@ -274,24 +677,151 @@ class SearchSettings extends DashboardPageController
             if (empty($allSpecialisms)) {
                 $specialismsList = "No specific specialisms available";
             } else {
-                $specialismsList = "Available legal specialisms: " . implode(', ', array_column($allSpecialisms, 'treeNodeName'));
+                // Build specialisms list with both names and IDs for AI mapping
+                $specialismsWithIds = array_map(function($spec) {
+                    return $spec['treeNodeName'] . " (ID: " . $spec['treeNodeID'] . ")";
+                }, $allSpecialisms);
+                $specialismsList = "Available legal specialisms: " . implode(', ', $specialismsWithIds);
             }
             
-            // Get configurable intent analysis prompt
-            $intentAnalysisPrompt = Config::get('katalysis.search.intent_analysis_prompt', $this->getDefaultIntentAnalysisPrompt());
+            // Get configurable response format instructions with automatic updates
+            $responseFormatInstructions = $this->getResponseFormatInstructions();
+            
+            // Get base intent analysis prompt
+            $baseIntentPrompt = $this->getDefaultIntentAnalysisPrompt();
+            
+            // Always use the configured format (either custom or updated default)
+            $intentAnalysisPrompt = $this->getFullIntentAnalysisPrompt($responseFormatInstructions);
+            
+            // Get available actions for the prompt
+            $db = Database::get();
+            $entityManager = $db->getEntityManager();
+            $actionService = new ActionService($entityManager);
+            $actionsForPrompt = $actionService->getActionsForPrompt();
+            
+            // Use original query directly - no enhancement needed for legal content
             
             // COMBINED PROMPT: Intent analysis + response generation in single AI call
             $combinedPrompt = "LEGAL QUERY: \"$query\"\n\n" .
+                "ORIGINAL QUERY: \"$query\"\n\n" .
                 "$specialismsList\n\n" .
+                "$actionsForPrompt\n\n" .
+                "ENHANCED JSON STRUCTURE: You must return JSON with this exact structure:\n" .
+                "```json\n" .
+                "{\n" .
+                "  \"intent\": {\n" .
+                "    \"intent_type\": \"string\",\n" .
+                "    \"confidence\": \"number\",\n" .
+                "    \"service_area\": \"string or null\",\n" .
+                "    \"urgency\": \"string\",\n" .
+                "    \"location_mentioned\": \"string or null\",\n" .
+                "    \"key_phrases\": [\"array of phrases\"]\n" .
+                "  },\n" .
+                "  \"response\": \"string (your structured response)\",\n" .
+                "  \"selected_actions\": [1,4] // Array of action IDs relevant to this query\n" .
+                "}\n" .
+                "```\n\n" .
+                "ACTION SELECTION: Review the available actions and include only the IDs of actions that are directly relevant to this specific legal query in the 'selected_actions' array. If no actions are relevant, use an empty array [].\n\n" .
                 $intentAnalysisPrompt;
             
-            error_log("OPTIMIZED: Using combined intent+response prompt");
             
-            // Single AI call for both intent and response
-            $combinedStartTime = microtime(true);
-            $combinedResponse = $ragAgent->answer(new UserMessage($combinedPrompt));
-            $combinedContent = $combinedResponse->getContent();
-            $combinedTime = round((microtime(true) - $combinedStartTime) * 1000, 2);
+            // OPTIMIZATION: Retrieve documents once and reuse for both AI and page display
+            $documentsStartTime = microtime(true);
+            $pageIndexService = new \KatalysisProAi\PageIndexService();
+            
+            // IMPORTANT: Use much larger topK for vector search to avoid truncating relevant results
+            // The FileVectorStore algorithm truncates during search, not after, so we need to search more
+            $vectorSearchTopK = max($candidateDocumentsCount * 3, 50); // At least 50, or 3x candidate count
+            
+
+            
+            // QUICK INTENT ANALYSIS: Get service area for vector search boosting
+            $serviceArea = '';
+            try {
+                $quickIntentPrompt = $this->getQuickIntentAnalysisPrompt();
+                $provider = $ragAgent->resolveProvider();
+                $provider->systemPrompt("You are a legal AI assistant that analyzes user queries to extract intent information. Always respond with valid JSON format.");
+                
+                $intentResponse = $provider->chat([new \NeuronAI\Chat\Messages\UserMessage("Query: \"$query\"\n\n$quickIntentPrompt")]);
+                $intentContent = $intentResponse->getContent();
+                
+                // Clean and parse intent response
+                $cleanedIntentContent = $intentContent;
+                if (preg_match('/```json\s*(.*?)\s*```/s', $cleanedIntentContent, $matches)) {
+                    $cleanedIntentContent = trim($matches[1]);
+                } else {
+                    $cleanedIntentContent = preg_replace('/```[a-z]*\s*|\s*```/', '', $cleanedIntentContent);
+                    $cleanedIntentContent = trim($cleanedIntentContent);
+                }
+                
+                $quickIntent = json_decode($cleanedIntentContent, true);
+                if ($quickIntent && isset($quickIntent['service_area'])) {
+                    $serviceArea = $quickIntent['service_area'];
+                }
+            } catch (\Exception $e) {
+                error_log("VECTOR SEARCH DEBUG - Quick intent analysis failed: " . $e->getMessage());
+            }
+            
+            // ENHANCED VECTOR SEARCH: Use service area boosting for better results
+            
+            if (!empty($serviceArea)) {
+                error_log("VECTOR SEARCH DEBUG - Using service area boosting for: '$serviceArea'");
+                $ragResults = $pageIndexService->getRelevantDocumentsWithBoost($query, $serviceArea, $vectorSearchTopK);
+            } else {
+                error_log("VECTOR SEARCH DEBUG - No service area detected, using standard search");
+                $ragResults = $pageIndexService->getRelevantDocuments($query, $vectorSearchTopK);
+            }
+            
+            // DEBUG: Log how many results we got back
+            $resultCount = is_array($ragResults) ? count($ragResults) : 0;
+            error_log("VECTOR SEARCH DEBUG - Retrieved $resultCount documents from vector store");
+            
+            // Limit to the configured number of candidate documents
+            if (!empty($ragResults) && count($ragResults) > $candidateDocumentsCount) {
+                $ragResults = array_slice($ragResults, 0, $candidateDocumentsCount);
+                error_log("VECTOR SEARCH DEBUG - Trimmed to $candidateDocumentsCount candidates as configured");
+            }
+            
+            // DEBUG: Log the titles of the first few results
+            if (!empty($ragResults)) {
+                foreach (array_slice($ragResults, 0, 5) as $i => $result) {
+                    $title = is_object($result) ? ($result->sourceName ?? 'No title') : 'Invalid result';
+                    $score = is_object($result) ? ($result->score ?? 0) : 0;
+                    error_log("VECTOR SEARCH DEBUG - Result " . ($i + 1) . ": '$title' (Score: $score)");
+                }
+            }
+            
+            $documentRetrievalTime = round((microtime(true) - $documentsStartTime) * 1000, 2);
+            
+            // Build context from retrieved documents
+            $contextDocuments = '';
+            if (!empty($ragResults)) {
+                $contextDocuments = "\n\nRELEVANT CONTEXT DOCUMENTS:\n";
+                foreach (array_slice($ragResults, 0, 10) as $index => $result) { // Limit to top 10 for AI context
+                    if (is_object($result)) {
+                        $title = $result->sourceName ?? 'Relevant Document';
+                        $content = $result->content ?? '';
+                        $score = $result->score ?? 0;
+                        $contextDocuments .= "Document " . ($index + 1) . " (Score: " . round($score, 3) . "):\n";
+                        $contextDocuments .= "Title: " . $title . "\n";
+                        $contextDocuments .= "Content: " . substr(strip_tags($content), 0, 800) . "...\n\n";
+                    }
+                }
+            }
+            
+            // Enhanced combined prompt with document context
+            $enhancedCombinedPrompt = $combinedPrompt . $contextDocuments;
+            
+            // Direct AI call with pre-retrieved documents (bypassing RAG retrieval)
+            $aiStartTime = microtime(true);
+            $provider = $ragAgent->resolveProvider(); // Get the AI provider directly
+            
+            // CRITICAL: Set system prompt to ensure JSON format compliance AND multi-sentence responses
+            $provider->systemPrompt("You are a legal AI assistant. You MUST respond with valid JSON in the exact format specified in the user's message. Do not deviate from the JSON structure requested. CRITICAL: Each response section MUST contain exactly 2 complete sentences - never just 1 sentence. Write 2 full sentences for each section to provide comprehensive information.");
+            
+            $aiResponse = $provider->chat([new \NeuronAI\Chat\Messages\UserMessage($enhancedCombinedPrompt)]);
+            $combinedContent = $aiResponse->getContent();
+            $combinedTime = round((microtime(true) - $aiStartTime) * 1000, 2);
             
             // Parse the combined response
             $intent = null;
@@ -307,39 +837,65 @@ class SearchSettings extends DashboardPageController
                 $cleanedContent = trim($cleanedContent);
             }
             
+
+            
             // Try to parse as JSON first
             $jsonData = json_decode($cleanedContent, true);
             if ($jsonData && isset($jsonData['intent']) && isset($jsonData['response'])) {
                 $intent = $jsonData['intent'];
                 $aiResponse = $jsonData['response'];
                 
-                // Find the most specific specialism ID that matches
-                $specialismId = null;
-                if (!empty($intent['service_area']) && $intent['service_area'] !== 'null') {
-                    $specialismId = $this->findBestMatchingSpecialism($intent['service_area'], $query, $allSpecialisms);
-                    if ($specialismId) {
-                        $matchedSpecialism = null;
-                        foreach ($allSpecialisms as $specialism) {
-                            if ($specialism['treeNodeID'] == $specialismId) {
-                                $matchedSpecialism = $specialism;
-                                break;
-                            }
-                        }
+
+                
+                // Extract selected actions from JSON (new optimized method)
+                $selectedActionsFromJson = isset($jsonData['selected_actions']) ? $jsonData['selected_actions'] : [];
+                
+                // Clean any [ACTIONS:] tags from the response (fallback method)
+                $aiResponse = preg_replace('/\[ACTIONS:[0-9,\s]+\]/', '', $aiResponse);
+                $aiResponse = trim($aiResponse);
+                
+
+                
+                // Debug section header analysis
+                if (preg_match_all('/<h[1-6]>([^<]+)<\/h[1-6]>/', $aiResponse, $matches)) {
+                    foreach ($matches[1] as $index => $header) {
                     }
+                } else {
+                }
+                
+                // Check for text-based section headers
+                if (preg_match_all('/^([A-Z][A-Z\s]+):/m', $aiResponse, $textMatches)) {
+                } else {
+                }
+                
+                // Use AI-provided specialism_id or map from service_area
+                $specialismId = $intent['specialism_id'] ?? null;
+                
+                // If no specialism_id but we have a service_area, try to map it
+                if (empty($specialismId) && !empty($intent['service_area'])) {
+                    $specialismId = $this->mapServiceAreaToSpecialismId($intent['service_area']);
+
                 }
                 
                 // Enhance intent with additional fields
-                $intent['specialism_id'] = $specialismId;
+                if (!isset($intent['specialism_id'])) {
+                    $intent['specialism_id'] = $specialismId;
+                }
+                
+
                 $intent['complexity'] = 'moderate';
                 $intent['suggested_specialist_count'] = 3;
                 $intent['suggested_office_focus'] = 'nearest';
                 $intent['review_type_needed'] = 'general';
                 
-                error_log("Combined intent+response completed in {$combinedTime}ms");
+
+                
                 
             } else {
                 // Fallback: treat entire response as AI response and create basic intent
                 $aiResponse = $combinedContent;
+                // No selected actions from JSON since it's not JSON format
+                $selectedActionsFromJson = [];
                 $intent = [
                     'intent_type' => 'information',
                     'service_area' => null,
@@ -354,34 +910,38 @@ class SearchSettings extends DashboardPageController
                 ];
             }
             
-            // Get relevant pages separately for the pages section with more results
-            $ragResults = [];
+            // OPTIMIZATION: Reuse documents already retrieved above (no duplicate retrieval)
             $ragStartTime = microtime(true);
+            $vectorRetrievalTime = $documentRetrievalTime; // Already retrieved above
+            $processingTime = 0;
+            
             try {
-                // Use PageIndexService directly to get more documents (15 instead of default 4)
-                $pageIndexService = new \KatalysisProAi\PageIndexService();
-                $ragResults = $pageIndexService->getRelevantDocuments($query, 15); // Get 15 documents for AI selection
+                // OPTIMIZATION: Skip vector retrieval - documents already retrieved above
+                // Using ragResults from the first retrieval (line ~707)
                 
-                // Process RAG documents and prioritize legal service pages
+                // PHASE 2B: Document processing only (no retrieval)
+                $processingStartTime = microtime(true);
                 $ragProcessResult = $this->processRagDocuments($ragResults, $query, $intent);
                 $ragResults = $ragProcessResult['documents'] ?? $ragProcessResult; // Handle both array and direct return
                 $ragDebugInfo = $ragProcessResult['debug'] ?? [];
+                $processingTime = round((microtime(true) - $processingStartTime) * 1000, 2);
                 
             } catch (\Exception $docError) {
-                error_log('Document retrieval for pages failed: ' . $docError->getMessage());
-                // Fallback to ragAgent method
+                // Fallback to ragAgent method with original query
                 try {
+                    $vectorStartTime = microtime(true);
                     $ragResults = $ragAgent->retrieveDocuments(new UserMessage($query));
-                    error_log("Fallback: Retrieved " . count($ragResults) . " documents via ragAgent");
+                    $vectorRetrievalTime = round((microtime(true) - $vectorStartTime) * 1000, 2);
+                    
+                    $processingStartTime = microtime(true);
                     $ragProcessResult = $this->processRagDocuments($ragResults, $query, $intent);
                     $ragResults = $ragProcessResult['documents'] ?? $ragProcessResult;
                     $ragDebugInfo = $ragProcessResult['debug'] ?? [];
+                    $processingTime = round((microtime(true) - $processingStartTime) * 1000, 2);
                 } catch (\Exception $fallbackError) {
-                    error_log('Fallback document retrieval also failed: ' . $fallbackError->getMessage());
                 }
             }
             $ragTime = round((microtime(true) - $ragStartTime) * 1000, 2);
-            error_log("TIMING: RAG document retrieval and processing completed in {$ragTime}ms");
             
             // PHASE 3: Targeted data retrieval based on intent
             $dataStartTime = microtime(true);
@@ -400,13 +960,71 @@ class SearchSettings extends DashboardPageController
             $placesStartTime = microtime(true);
             $places = $this->getTargetedPlaces($query, $intent);
             $placesTime = round((microtime(true) - $placesStartTime) * 1000, 2);
-            error_log("Places search completed in {$placesTime}ms");
+            
+            // Get available actions - filter based on AI selection
+            $actionsStartTime = microtime(true);
+            // Parse selected action IDs - try JSON method first, then fallback to parsing
+            $selectedActionIds = isset($selectedActionsFromJson) ? $selectedActionsFromJson : $this->parseSelectedActions($aiResponse);
+            
+
+            
+            if (!empty($selectedActionIds)) {
+                // Filter actions based on AI selection
+                $actions = [];
+                foreach ($selectedActionIds as $actionId) {
+                    $action = $actionService->getActionById($actionId);
+                    if ($action) {
+                        $actions[] = [
+                            'id' => $action->getId(),
+                            'name' => $action->getName(),
+                            'icon' => $action->getIcon(),
+                            'triggerInstruction' => $action->getTriggerInstruction(),
+                            'responseInstruction' => $action->getResponseInstruction()
+                        ];
+                    } else {
+                    }
+                }
+            } else {
+                // No actions selected by AI - use fallback logic
+                $allActions = $actionService->getAllActions();
+                
+                // TEMPORARY FALLBACK: If no actions selected, show the most generic ones
+                $actions = [];
+                if (!empty($allActions)) {
+                    foreach ($allActions as $action) {
+                        // Show Contact Form (ID 4) and Book Meeting (ID 1) as fallback
+                        if (in_array($action->getId(), [1, 4])) {
+                            $actions[] = [
+                                'id' => $action->getId(),
+                                'name' => $action->getName(),
+                                'icon' => $action->getIcon(),
+                                'triggerInstruction' => $action->getTriggerInstruction(),
+                                'responseInstruction' => $action->getResponseInstruction()
+                            ];
+                        }
+                    }
+                }
+            }
+            $actionsTime = round((microtime(true) - $actionsStartTime) * 1000, 2);
             
             $pages = $this->formatSearchResults($ragResults, $includePageLinks, $showSnippets);
             
             $processingTime = round((microtime(true) - $startTime) * 1000, 2);
             
-            error_log("Search completed in {$processingTime}ms. Intent: {$intent['intent_type']}, Service: " . ($intent['service_area'] ?? 'null'));
+            
+            // Get configured sections for frontend parsing
+            $configuredSections = [];
+            $savedSections = Config::get('katalysis.search.response_sections', '');
+            if (!empty($savedSections)) {
+                $sectionsData = json_decode($savedSections, true);
+                if (is_array($sectionsData)) {
+                    foreach ($sectionsData as $section) {
+                        if (!empty($section['enabled']) && !empty($section['name'])) {
+                            $configuredSections[] = strtoupper($section['name']) . ':';
+                        }
+                    }
+                }
+            }
             
             $results = [
                 'success' => true,
@@ -417,22 +1035,38 @@ class SearchSettings extends DashboardPageController
                 'specialists' => $specialists,
                 'reviews' => $reviews,
                 'places' => $places,
+                'actions' => $actions,
+                'configured_sections' => $configuredSections,
                 'processing_time' => $processingTime,
                 'debug' => [
                     'intent_analysis' => $intent,
                     'processing_time_ms' => $processingTime,
-                    'optimization_strategy' => $this->getOptimizationStrategy($intent),
                     'query_classification' => $this->getQueryClassification($intent),
-                    'approach' => 'Combined intent+response (Optimized)',
+                    'approach' => 'Combined intent+response (Fully Optimized - Single Document Retrieval)',
                     'performance_breakdown' => [
-                        'combined_ai_call_ms' => $combinedTime,
-                        'rag_documents_ms' => $ragTime,
-                        'specialists_search_ms' => $specialistsTime,
-                        'reviews_search_ms' => $reviewsTime,
-                        'places_search_ms' => $placesTime,
+                        // CHRONOLOGICAL ORDER: Reordered to match actual execution flow
+                        'document_retrieval_ms' => round($documentRetrievalTime, 2),
+                        'document_processing_ms' => round($ragTime - $documentRetrievalTime, 2), // Processing time only (excluding retrieval)
+                        'combined_ai_call_ms' => round($combinedTime, 2),
+                        'supporting_content_ms' => round($specialistsTime + $reviewsTime + $placesTime + $actionsTime, 2),
+                        'rag_detail' => [
+                            'vector_retrieval_ms' => round($documentRetrievalTime, 2), // Actual retrieval time from first phase
+                            'candidate_preparation_ms' => round($ragDebugInfo['processing_time_breakdown']['candidate_preparation_ms'] ?? 0, 2),
+                            'document_selection_ms' => round($ragDebugInfo['processing_time_breakdown']['document_selection_ms'] ?? 0, 2),
+                            'result_creation_ms' => round($ragDebugInfo['processing_time_breakdown']['result_creation_ms'] ?? 0, 2),
+                            'ai_selection_used' => $ragDebugInfo['ai_selection_enabled'] ?? false,
+                            'selection_method' => $ragDebugInfo['selection_method'] ?? 'unknown'
+                        ],
+                        'breakdown_detail' => [
+                            'specialists_search_ms' => round($specialistsTime, 2),
+                            'reviews_search_ms' => round($reviewsTime, 2),
+                            'places_search_ms' => round($placesTime, 2),
+                            'actions_retrieval_ms' => round($actionsTime, 2)
+                        ],
                         'total_ms' => $processingTime,
                         'ai_percentage' => round(($combinedTime / $processingTime) * 100, 1),
-                        'optimization_notes' => 'Single AI call replaces separate intent analysis and query building'
+                        'optimization_notes' => 'Single document retrieval used for both AI response and page display. ' . 
+                                               ($ragDebugInfo['ai_selection_enabled'] ?? false ? 'AI document selection enabled.' : 'Fast algorithmic selection used.')
                     ],
                     'document_selection' => $ragDebugInfo
                 ]
@@ -444,8 +1078,6 @@ class SearchSettings extends DashboardPageController
             return $this->app->make(ResponseFactory::class)->json($results);
             
         } catch (\Exception $e) {
-            error_log('Search error: ' . $e->getMessage());
-            error_log('Search error trace: ' . $e->getTraceAsString());
             return $this->app->make(ResponseFactory::class)->json([
                 'success' => false,
                 'error' => 'Search failed: ' . $e->getMessage()
@@ -512,7 +1144,6 @@ class SearchSettings extends DashboardPageController
             ]);
             
         } catch (\Exception $e) {
-            error_log('Async specialists loading error: ' . $e->getMessage());
             return $this->app->make(ResponseFactory::class)->json([
                 'success' => false,
                 'specialists' => [['error' => 'Specialist search failed: ' . $e->getMessage()]],
@@ -573,7 +1204,6 @@ class SearchSettings extends DashboardPageController
             ]);
             
         } catch (\Exception $e) {
-            error_log('Async reviews loading error: ' . $e->getMessage());
             return $this->app->make(ResponseFactory::class)->json([
                 'success' => false,
                 'reviews' => [['error' => 'Review search failed: ' . $e->getMessage()]],
@@ -624,11 +1254,57 @@ class SearchSettings extends DashboardPageController
             ]);
             
         } catch (\Exception $e) {
-            error_log('Async places loading error: ' . $e->getMessage());
             return $this->app->make(ResponseFactory::class)->json([
                 'success' => false,
                 'places' => [['error' => 'Places search failed: ' . $e->getMessage()]],
                 'error' => 'Places search failed'
+            ]);
+        }
+    }
+    
+    /**
+     * Get action details for frontend (AJAX endpoint)
+     */
+    public function get_action_details($actionId = null)
+    {
+        try {
+            if (!$actionId) {
+                return $this->app->make(ResponseFactory::class)->json([
+                    'success' => false,
+                    'error' => 'Action ID required'
+                ]);
+            }
+
+            $db = Database::get();
+            $entityManager = $db->getEntityManager();
+            $actionService = new ActionService($entityManager);
+            $action = $actionService->getActionById((int)$actionId);
+
+            if (!$action) {
+                return $this->app->make(ResponseFactory::class)->json([
+                    'success' => false,
+                    'error' => 'Action not found'
+                ]);
+            }
+
+            return $this->app->make(ResponseFactory::class)->json([
+                'success' => true,
+                'action' => [
+                    'id' => $action->getId(),
+                    'name' => $action->getName(),
+                    'icon' => $action->getIcon(),
+                    'triggerInstruction' => $action->getTriggerInstruction(),
+                    'responseInstruction' => $action->getResponseInstruction(),
+                    'actionType' => $action->getActionType(),
+                    'formSteps' => $action->getFormSteps(),
+                    'showImmediately' => $action->getShowImmediately()
+                ]
+            ]);
+
+        } catch (\Exception $e) {
+            return $this->app->make(ResponseFactory::class)->json([
+                'success' => false,
+                'error' => 'Failed to get action details'
             ]);
         }
     }
@@ -651,6 +1327,7 @@ class SearchSettings extends DashboardPageController
             $startTime = microtime(true);
             
             // Get search settings
+            $candidateDocumentsCount = Config::get('katalysis.search.candidate_documents_count', 15);
             $includePageLinks = Config::get('katalysis.search.include_page_links', true);
             $showSnippets = Config::get('katalysis.search.show_snippets', true);
             
@@ -660,27 +1337,31 @@ class SearchSettings extends DashboardPageController
             
             $ragResults = [];
             try {
-                // Use the RAG agent to get document results - use correct method signature
-                $ragResults = $ragAgent->retrieveDocuments(new UserMessage($query));
+                // IMPROVED: Use PageIndexService directly for better control over document count
+                $pageIndexService = new \KatalysisProAi\PageIndexService();
+                
+                // Use larger topK for vector search to ensure we don't miss relevant documents
+                $vectorSearchTopK = max($candidateDocumentsCount * 3, 50);
+                $ragResults = $pageIndexService->getRelevantDocuments($query, $vectorSearchTopK);
+                
+                // TEMPORARILY DISABLED: Show all documents for debugging
+                /*if (!empty($ragResults) && count($ragResults) > $candidateDocumentsCount) {
+                    $ragResults = array_slice($ragResults, 0, $candidateDocumentsCount);
+                }*/
                 
                 // Process RAG documents if we got results
                 if (!empty($ragResults)) {
                     $ragResults = $this->processRagDocuments($ragResults, $query, []);
-                }
-            } catch (\Exception $docError) {
-                error_log('RAG retrieveDocuments failed: ' . $docError->getMessage());
-                // Try alternative method if available
-                try {
-                    $pageIndexService = new \KatalysisProAi\PageIndexService();
-                    $ragResults = $pageIndexService->getRelevantDocuments($query, 12);
+                } else {
+                    // Fallback to RAG agent if PageIndexService fails
+                    $ragResults = $ragAgent->retrieveDocuments(new UserMessage($query));
                     
                     if (!empty($ragResults)) {
                         $ragResults = $this->processRagDocuments($ragResults, $query, []);
                     }
-                } catch (\Exception $fallbackError) {
-                    error_log('Both RAG methods failed: ' . $fallbackError->getMessage());
-                    $ragResults = [];
                 }
+            } catch (\Exception $docError) {
+                $ragResults = [];
             }
             
             $pages = $this->formatSearchResults($ragResults, $includePageLinks, $showSnippets);
@@ -693,7 +1374,6 @@ class SearchSettings extends DashboardPageController
             ]);
             
         } catch (\Exception $e) {
-            error_log('Async pages loading error: ' . $e->getMessage());
             return $this->app->make(ResponseFactory::class)->json([
                 'success' => false,
                 'pages' => [],
@@ -714,7 +1394,7 @@ class SearchSettings extends DashboardPageController
                 $type = 'general';
                 
                 if (is_array($result)) {
-                    // Enhanced result from our enhancePageResults method
+                    // Result from our enhancePageResults method
                     $title = $result['title'] ?? $title;
                     $content = $result['content'] ?? '';
                     $url = $result['url'] ?? '';
@@ -751,7 +1431,6 @@ class SearchSettings extends DashboardPageController
                 $formatted[] = $item;
                 
             } catch (\Exception $e) {
-                error_log("Error formatting search result: " . $e->getMessage());
                 continue;
             }
         }
@@ -778,8 +1457,11 @@ class SearchSettings extends DashboardPageController
 
     private function processRagDocuments($ragResults, $query, $intent = [])
     {
+        $overallStartTime = microtime(true);
+        
         try {
-            // OPTIMIZED: Fast scoring-based document selection (no AI calls, no semantic filtering)
+            // Phase 1: Candidate preparation and filtering
+            $candidateStartTime = microtime(true);
             $processedResults = [];
             $seenUrls = []; // Track URLs to prevent duplicates
 
@@ -804,22 +1486,35 @@ class SearchSettings extends DashboardPageController
                     $pageType = $result->metadata['pagetype'] ?? '';
 
                     // Apply page type scoring boost to prioritize certain content types
-                    $boostedScore = $this->applyPageTypeBoost($score, $pageType);
+                    $pageTypeBoostedScore = $this->applyPageTypeBoost($score, $pageType);
+                    
+                    // Apply query keyword matching boost to prioritize pages with matching keywords
+                    $finalBoostedScore = $this->applyQueryKeywordBoost($pageTypeBoostedScore, $title, $query);
 
                     // Only include documents with reasonable relevance scores (after boost)
-                    if ($boostedScore >= 0.3) {
+                    // TESTING: Reduced threshold to 0.1 to debug Work Accident page issue
+                    if ($finalBoostedScore >= 0.1) {
                         $candidateDocs[] = [
                             'title' => $title,
                             'url' => $url,
                             'content' => $content,
-                            'score' => $boostedScore, // Use boosted score
+                            'score' => $finalBoostedScore, // Use final boosted score
                             'original_score' => $score, // Keep original for debugging
+                            'page_type_boosted_score' => $pageTypeBoostedScore, // Score after page type boost
                             'page_type' => $pageType,
-                            'boost_applied' => $boostedScore > $score ? round(($boostedScore - $score), 3) : 0
+                            'page_type_boost' => $pageTypeBoostedScore > $score ? round(($pageTypeBoostedScore - $score), 3) : 0,
+                            'keyword_boost' => $finalBoostedScore > $pageTypeBoostedScore ? round(($finalBoostedScore - $pageTypeBoostedScore), 3) : 0,
+                            'parent_child_boost' => 0, // Will be calculated later
+                            'total_boost' => $finalBoostedScore > $score ? round(($finalBoostedScore - $score), 3) : 0
                         ];
                         $seenUrls[] = $url;
                     }
                 }
+            }
+
+            // Apply parent-child relationship boosts before final selection
+            if (!empty($candidateDocs)) {
+                $candidateDocs = $this->applyParentChildBoosts($candidateDocs);
             }
 
             // FAST SELECTION: Use deterministic scoring instead of AI calls
@@ -829,29 +1524,47 @@ class SearchSettings extends DashboardPageController
                     return $b['score'] <=> $a['score'];
                 });
                 
-                error_log("FAST DOCUMENT SELECTION: Starting with " . count($candidateDocs) . " candidate documents");
                 
                 // Log score boost summary
                 $boostedDocs = array_filter($candidateDocs, function($doc) { return $doc['boost_applied'] > 0; });
                 if (!empty($boostedDocs)) {
-                    error_log("SCORE BOOSTS APPLIED: " . count($boostedDocs) . " documents received boosts");
                     foreach ($boostedDocs as $doc) {
-                        error_log("BOOST: {$doc['page_type']} '{$doc['title']}' - Original: {$doc['original_score']}, Boosted: {$doc['score']} (+{$doc['boost_applied']})");
                     }
                 }
                 
-                // FAST SEMANTIC FILTER: Remove obvious phonetic false positives without AI
-                $candidateDocs = $this->fastSemanticFilter($candidateDocs, $query);
-                error_log("FAST SEMANTIC FILTER: Reduced to " . count($candidateDocs) . " semantically relevant documents");
+                $candidateTime = round((microtime(true) - $candidateStartTime) * 1000, 2);
                 
-                // FAST SELECTION: Take top 7 documents by score, ensuring page type diversity
-                $selectionResult = $this->getFastBalancedSelection($candidateDocs, 7);
-                $selectedDocs = $selectionResult['selected'];
-                $enhancedCandidates = $selectionResult['candidates']; // This includes parent lookup additions
+                // Phase 2: Document selection (AI or algorithmic)
+                $selectionStartTime = microtime(true);
+                $useAISelection = Config::get('katalysis.search.use_ai_document_selection', false); // Default to false for now
+                $maxDocuments = Config::get('katalysis.search.max_results', 8); // Use unified max_results for both AI and algorithmic selection
                 
-                error_log("ENHANCED CANDIDATES: Final candidate list has " . count($enhancedCandidates) . " documents (after parent lookup)");
+                if ($useAISelection && count($candidateDocs) >= 3) {
+                    // AI-POWERED SELECTION: Use AI to intelligently select documents
+                    $selectionResult = $this->getAIDocumentSelection($candidateDocs, $query, $intent, $maxDocuments);
+                    $selectedDocs = $selectionResult['selected'];
+                    $enhancedCandidates = $selectionResult['candidates'];
+                    $selectionMethod = $selectionResult['selection_method'] ?? 'AI-powered selection';
+                    $selectionReasoning = $selectionResult['ai_reasoning'] ?? 'AI selection completed';
+                } else {
+                    // ALGORITHMIC SELECTION: Use fast algorithmic selection (original fallback method)
+                    if ($useAISelection) {
+                    } else {
+                    }
+                    $algorithmicMaxDocs = $maxDocuments; // Use same limit for both AI and algorithmic selection
+                    $selectionResult = $this->getFastBalancedSelection($candidateDocs, $algorithmicMaxDocs, $intent);
+                    $selectedDocs = $selectionResult['selected'];
+                    $enhancedCandidates = $selectionResult['candidates'];
+                    $selectionMethod = 'Fast algorithmic selection';
+                    $selectionReasoning = 'Algorithmic scoring with content type diversity and specialism awareness';
+                }
                 
-                // Create results from selected documents
+                $selectionTime = round((microtime(true) - $selectionStartTime) * 1000, 2);
+                $totalProcessingTime = round((microtime(true) - $overallStartTime) * 1000, 2);
+                
+                
+                // Phase 3: Create results from selected documents
+                $resultCreationStartTime = microtime(true);
                 foreach ($selectedDocs as $index => $doc) {
                     $processedResults[] = [
                         'title' => $doc['title'],
@@ -866,7 +1579,6 @@ class SearchSettings extends DashboardPageController
                     ];
                 }
                 
-                error_log("FAST SELECTION COMPLETE: Selected " . count($processedResults) . " documents in " . (microtime(true) - ($fastStart ?? microtime(true))) . "ms");
             }
 
             // FAST SUPPLEMENT: Add articles and case studies based on specialism (if available)
@@ -885,21 +1597,31 @@ class SearchSettings extends DashboardPageController
                 }
                 
                 if (!empty($supplementaryDocs)) {
-                    error_log("FAST SUPPLEMENT: Adding " . count($supplementaryDocs) . " supplementary documents in {$supplementTime}ms");
                     $processedResults = array_merge($processedResults, $supplementaryDocs);
                 }
             }
 
+            $resultCreationTime = round((microtime(true) - $resultCreationStartTime) * 1000, 2);
+            $finalProcessingTime = round((microtime(true) - $overallStartTime) * 1000, 2);
+
             return [
                 'documents' => $processedResults,
                 'debug' => [
+                    // Timing breakdown
+                    'processing_time_breakdown' => [
+                        'candidate_preparation_ms' => $candidateTime,
+                        'document_selection_ms' => $selectionTime,
+                        'result_creation_ms' => $resultCreationTime,
+                        'total_processing_ms' => $finalProcessingTime
+                    ],
+                    // Selection details  
                     'total_candidate_docs' => count($enhancedCandidates ?? $candidateDocs),
                     'ai_selected_count' => count($processedResults),
-                    'selection_method' => 'Fast scoring with parent page index lookup',
-                    'score_threshold' => 0.3,
+                    'selection_method' => $selectionMethod ?? 'Fast scoring with parent page index lookup',
+                    'selection_reasoning' => $selectionReasoning ?? 'Standard algorithmic selection',
+                    'ai_selection_enabled' => $useAISelection ?? false,
+                    'score_threshold' => 0.1,
                     'max_candidates_processed' => count($enhancedCandidates ?? $candidateDocs),
-                    'page_type_distribution' => $this->getPageTypeDistribution($enhancedCandidates ?? $candidateDocs),
-                    'selected_type_distribution' => $this->getPageTypeDistribution($processedResults),
                     'candidate_documents' => array_map(function($doc) {
                         return [
                             'title' => $doc['title'],
@@ -930,8 +1652,6 @@ class SearchSettings extends DashboardPageController
             ];
             
         } catch (\Exception $e) {
-            error_log('Error processing RAG documents: ' . $e->getMessage());
-            error_log('Error trace: ' . $e->getTraceAsString());
             $fallbackResult = $this->fallbackRagProcessing($ragResults); // Return fallback results
             return [
                 'documents' => $fallbackResult,
@@ -994,10 +1714,146 @@ class SearchSettings extends DashboardPageController
     }
     
     /**
+     * AI-powered document selection - uses AI to intelligently select most relevant documents
+     */
+    private function getAIDocumentSelection($candidateDocs, $query, $intent = [], $maxResults = 6)
+    {
+        $startTime = microtime(true);
+        
+        try {
+            if (empty($candidateDocs)) {
+                return ['selected' => [], 'candidates' => []];
+            }
+            
+            // Prepare candidate documents for AI evaluation
+            $candidateList = [];
+            foreach ($candidateDocs as $index => $doc) {
+                $candidateList[] = [
+                    'index' => $index,
+                    'title' => $doc['title'],
+                    'content_snippet' => substr($doc['content'], 0, 200) . '...',
+                    'page_type' => $doc['page_type'] ?: 'general',
+                    'score' => $doc['score'],
+                    'url' => $doc['url']
+                ];
+            }
+            
+            // Build AI selection prompt
+            $selectionRules = $this->getDefaultLinkSelectionRules();
+            $candidatesJson = json_encode($candidateList, JSON_PRETTY_PRINT);
+            
+            $aiPrompt = "USER QUERY: \"$query\"\n\n";
+            $aiPrompt .= "CANDIDATE DOCUMENTS:\n$candidatesJson\n\n";
+            $aiPrompt .= "$selectionRules\n\n";
+            $aiPrompt .= "TASK: Select the $maxResults most relevant documents from the candidates above. ";
+            $aiPrompt .= "Return a JSON array with the indices of selected documents in order of importance (most important first).\n\n";
+            $aiPrompt .= "Response format: {\"selected_indices\": [0, 3, 7, 2, 5, 1], \"reasoning\": \"Brief explanation of selection\"}\n";
+            $aiPrompt .= "CRITICAL: Only return valid JSON with the exact format shown above.";
+            
+            // Use a simple AI provider for document selection (not RAG)
+            $provider = new \NeuronAI\Providers\OpenAI\OpenAI(
+                \Concrete\Core\Support\Facade\Config::get('katalysis.ai.open_ai_key'),
+                \Concrete\Core\Support\Facade\Config::get('katalysis.ai.open_ai_model')
+            );
+            
+            $aiResponse = $provider->chat([
+                new \NeuronAI\Chat\Messages\UserMessage("SYSTEM: You are an expert document relevance analyzer. Select the most relevant documents for the user's query.\n\nUSER REQUEST:\n" . $aiPrompt)
+            ]);
+            
+            $responseContent = $aiResponse->getContent();
+            
+            // Parse AI response
+            $selectionData = json_decode($responseContent, true);
+            if (json_last_error() !== JSON_ERROR_NONE) {
+                throw new \Exception("Invalid JSON response from AI: " . json_last_error_msg());
+            }
+            
+            if (!isset($selectionData['selected_indices']) || !is_array($selectionData['selected_indices'])) {
+                throw new \Exception("AI response missing selected_indices array");
+            }
+            
+            $selectedIndices = $selectionData['selected_indices'];
+            $reasoning = $selectionData['reasoning'] ?? 'AI selection without specific reasoning';
+            
+            // Build selected documents
+            $selectedDocs = [];
+            foreach ($selectedIndices as $order => $index) {
+                if (isset($candidateDocs[$index])) {
+                    $doc = $candidateDocs[$index];
+                    $doc['ai_order'] = $order + 1;
+                    $doc['selection_reason'] = "AI selected (#" . ($order + 1) . "): " . $reasoning;
+                    $selectedDocs[] = $doc;
+                    
+                    if (count($selectedDocs) >= $maxResults) {
+                        break; // Ensure we don't exceed maxResults
+                    }
+                }
+            }
+            
+            $processingTime = round((microtime(true) - $startTime) * 1000, 2);
+            
+            return [
+                'selected' => $selectedDocs,
+                'candidates' => $candidateDocs,
+                'ai_reasoning' => $reasoning,
+                'processing_time_ms' => $processingTime,
+                'selection_method' => 'AI-powered intelligent selection'
+            ];
+            
+        } catch (\Exception $e) {
+            
+            // Fallback to algorithmic selection
+            return $this->getFastBalancedSelection($candidateDocs, min($maxResults, 3), null);
+        }
+    }
+    
+    /**
      * Fast balanced selection without AI calls - prioritize by score and ensure content diversity
      */
-    private function getFastBalancedSelection($candidateDocs, $maxResults = 7)
+    private function getFastBalancedSelection($candidateDocs, $maxResults = 2, $intent = null)
     {
+        // PERFORMANCE OPTIMIZATION: Filter out content types handled by separate backend queries
+        // NOTE: Removed 'calculator_entry' to allow calculators to appear in search results
+        $excludedTypes = ['article', 'case_study', 'guide', 'blog_entry'];
+        $filteredDocs = [];
+        
+        foreach ($candidateDocs as $doc) {
+            $pageType = $doc['page_type'] ?: 'unknown';
+            if (!in_array($pageType, $excludedTypes)) {
+                $filteredDocs[] = $doc;
+            }
+        }
+        
+        
+        // Use filtered documents for selection
+        $candidateDocs = $filteredDocs;
+        
+        // SPECIALISM-AWARE BOOSTING: If we have specialism context, boost matching pages
+        if ($intent && isset($intent['specialism_id'])) {
+            $specialismId = $intent['specialism_id'];
+            $serviceArea = $intent['service_area'] ?? '';
+            
+            foreach ($candidateDocs as $index => &$doc) {
+                $title = strtolower($doc['title']);
+                
+                if ($serviceArea) {
+                    // General service area matching for all specialisms
+                    $serviceAreaLower = strtolower($serviceArea);
+                    
+                    // Boost pages that match the detected service area by title
+                    if ($doc['page_type'] === 'legal_service_index' && strpos($title, $serviceAreaLower) !== false) {
+                        $doc['score'] += 0.5; // Major boost for main service area page
+                        $doc['specialism_boost'] = true;
+                    }
+                }
+            }
+            
+            // Re-sort candidates by score after boosting
+            usort($candidateDocs, function($a, $b) {
+                return $b['score'] <=> $a['score'];
+            });
+        }
+        
         $selected = [];
         $typeCount = [];
         
@@ -1011,34 +1867,26 @@ class SearchSettings extends DashboardPageController
         // SPECIAL CASE: If we have legal_service pages but no legal_service_index, 
         // find existing index pages by looking up parent pages
         if (isset($availableTypes['legal_service']) && !isset($availableTypes['legal_service_index'])) {
-            error_log("PARENT LOOKUP: Starting search for legal_service_index pages via parent lookup");
             $existingIndexPages = $this->findLegalServiceIndexPages($candidateDocs);
             if (!empty($existingIndexPages)) {
                 // Add found index pages to candidate documents
                 $candidateDocs = array_merge($existingIndexPages, $candidateDocs);
                 $availableTypes['legal_service_index'] = count($existingIndexPages);
-                error_log("FOUND INDEX PAGES: Located " . count($existingIndexPages) . " existing legal_service_index pages via parent lookup");
             } else {
-                error_log("PARENT LOOKUP: No legal_service_index pages found via parent lookup");
             }
         } else {
             if (!isset($availableTypes['legal_service'])) {
-                error_log("PARENT LOOKUP: Skipped - no legal_service pages in candidates");
             }
             if (isset($availableTypes['legal_service_index'])) {
-                error_log("PARENT LOOKUP: Skipped - legal_service_index pages already found in vector search");
             }
         }
         
-        // Define priority content type requirements (back to original fixed requirements)
+        // Define priority content type requirements - HIGHLY OPTIMIZED FOR SPEED
+        // Focus ONLY on the most essential content: 1 index + 1 service page
         $requiredTypes = [
-            'legal_service_index' => 1,  // At least 1 index page
-            'legal_service' => 2,        // At least 2 service pages  
-            'blog_entry' => 1,           // At least 1 blog/article
-            'article' => 1,              // At least 1 article
-            'calculator_entry' => 1,     // At least 1 calculator
-            'case_study' => 1,           // At least 1 case study
-            'guide' => 1                 // At least 1 guide
+            'legal_service_index' => 1,  // At least 1 index page (ESSENTIAL for navigation)
+            'legal_service' => 1,        // At least 1 service page (CORE CONTENT)
+            // All other content types excluded for maximum AI performance
         ];
         
         // First pass: Ensure required types are included (highest scoring of each type)
@@ -1090,7 +1938,7 @@ class SearchSettings extends DashboardPageController
         
         return [
             'selected' => $selectedDocs,
-            'candidates' => $candidateDocs  // Enhanced candidates including parent lookup
+            'candidates' => $candidateDocs  // Candidates including parent lookup
         ];
     }
     
@@ -1103,7 +1951,6 @@ class SearchSettings extends DashboardPageController
         $foundIndexPageIds = [];
         
         try {
-            error_log("PARENT LOOKUP: Using Concrete CMS Page objects");
             
             $legalServiceCount = 0;
             
@@ -1111,11 +1958,9 @@ class SearchSettings extends DashboardPageController
             foreach ($candidateDocs as $doc) {
                 if ($doc['page_type'] === 'legal_service') {
                     $legalServiceCount++;
-                    error_log("PARENT LOOKUP: Processing legal_service page: " . $doc['title'] . " URL: " . $doc['url']);
                     
                     // Extract page ID from URL
                     $pageId = $this->extractPageIdFromUrl($doc['url']);
-                    error_log("PARENT LOOKUP: Extracted page ID: " . ($pageId ?: 'NULL') . " from URL: " . $doc['url']);
                     
                     if ($pageId) {
                         // Get the page object
@@ -1124,7 +1969,6 @@ class SearchSettings extends DashboardPageController
                         if ($page && !$page->isError()) {
                             // Get parent page using proper CMS method
                             $parentPageId = $page->getCollectionParentID();
-                            error_log("PARENT LOOKUP: Parent ID for page {$pageId}: " . ($parentPageId ?: 'NULL'));
                             
                             if ($parentPageId && $parentPageId > 1 && !in_array($parentPageId, $foundIndexPageIds)) {
                                 // Get parent page object
@@ -1135,7 +1979,6 @@ class SearchSettings extends DashboardPageController
                                     $pageType = $parentPage->getPageTypeObject();
                                     $parentPageType = $pageType ? $pageType->getPageTypeHandle() : null;
                                     
-                                    error_log("PARENT LOOKUP: Parent page {$parentPageId} has type: " . ($parentPageType ?: 'NULL'));
                                     
                                     if ($parentPageType === 'legal_service_index') {
                                         $foundIndexPageIds[] = $parentPageId;
@@ -1167,28 +2010,21 @@ class SearchSettings extends DashboardPageController
                                             'source' => 'parent_page_lookup'
                                         ];
                                         
-                                        error_log("FOUND INDEX PAGE: {$title} (ID: {$parentPageId}) as parent of legal_service page {$pageId}");
                                     }
                                 } else {
-                                    error_log("PARENT LOOKUP: Failed to get parent page object for ID {$parentPageId}");
                                 }
                             } else {
                                 if (!$parentPageId) {
-                                    error_log("PARENT LOOKUP: No parent found for page {$pageId}");
                                 } elseif ($parentPageId <= 1) {
-                                    error_log("PARENT LOOKUP: Parent {$parentPageId} is root level for page {$pageId}");
                                 } elseif (in_array($parentPageId, $foundIndexPageIds)) {
-                                    error_log("PARENT LOOKUP: Parent {$parentPageId} already processed for page {$pageId}");
                                 }
                             }
                         } else {
-                            error_log("PARENT LOOKUP: Failed to get page object for ID {$pageId}");
                         }
                     }
                 }
             }
             
-            error_log("PARENT LOOKUP: Processed {$legalServiceCount} legal_service pages, found " . count($indexPages) . " index pages");
             
             // Sort by score (highest first)
             usort($indexPages, function($a, $b) {
@@ -1196,8 +2032,6 @@ class SearchSettings extends DashboardPageController
             });
             
         } catch (\Exception $e) {
-            error_log("PARENT LOOKUP ERROR: " . $e->getMessage());
-            error_log("PARENT LOOKUP TRACE: " . $e->getTraceAsString());
         }
         
         return $indexPages;
@@ -1209,120 +2043,41 @@ class SearchSettings extends DashboardPageController
     private function extractPageIdFromUrl($url)
     {
         try {
-            error_log("URL EXTRACTION: Processing URL: " . $url);
             
             // Remove domain and get path
             $path = parse_url($url, PHP_URL_PATH);
             if (!$path) {
-                error_log("URL EXTRACTION: Failed to parse URL path from: " . $url);
                 return null;
             }
             
-            error_log("URL EXTRACTION: Extracted path: " . $path);
             
             // Use Concrete CMS Page::getByPath() method
             $page = \Concrete\Core\Page\Page::getByPath($path);
             
             if ($page && !$page->isError()) {
                 $pageId = $page->getCollectionID();
-                error_log("URL EXTRACTION: Found page ID {$pageId} by path: " . $path);
                 return (int)$pageId;
             }
             
-            error_log("URL EXTRACTION: No page found by path, trying segments");
             
             // If not found by full path, try segments
             $segments = explode('/', trim($path, '/'));
             if (!empty($segments)) {
                 $lastSegment = end($segments);
-                error_log("URL EXTRACTION: Trying last segment: " . $lastSegment);
                 
                 // Try getByHandle for the last segment
                 $page = \Concrete\Core\Page\Page::getByHandle($lastSegment);
                 if ($page && !$page->isError()) {
                     $pageId = $page->getCollectionID();
-                    error_log("URL EXTRACTION: Found page ID {$pageId} by handle: " . $lastSegment);
                     return (int)$pageId;
                 }
             }
             
-            error_log("URL EXTRACTION: No page found for URL: " . $url);
             return null;
             
         } catch (\Exception $e) {
-            error_log("URL EXTRACTION ERROR: " . $e->getMessage() . " for URL: " . $url);
             return null;
         }
-    }
-    
-    /**
-     * Fast semantic filter to remove obvious phonetic false positives without AI calls
-     */
-    private function fastSemanticFilter($candidateDocs, $query)
-    {
-        if (empty($candidateDocs) || empty($query)) {
-            return $candidateDocs;
-        }
-        
-        $queryLower = strtolower(trim($query));
-        $queryWords = preg_split('/\s+/', $queryLower);
-        $filteredDocs = [];
-        
-        foreach ($candidateDocs as $doc) {
-            $titleLower = strtolower($doc['title']);
-            $shouldInclude = true;
-            
-            // Check for obvious phonetic false positives
-            foreach ($queryWords as $queryWord) {
-                // Skip very short words
-                if (strlen($queryWord) < 4) continue;
-                
-                // Get words from document title
-                $titleWords = preg_split('/\s+/', $titleLower);
-                
-                foreach ($titleWords as $titleWord) {
-                    // Calculate Levenshtein distance
-                    $distance = levenshtein($queryWord, $titleWord);
-                    
-                    // If words are very similar (1-2 character difference) but not exact matches
-                    if ($distance > 0 && $distance <= 2 && strlen($titleWord) >= 4) {
-                        // Check if the exact query word appears anywhere in title or content
-                        $docContent = strtolower($doc['content'] ?? '');
-                        if (strpos($titleLower, $queryWord) === false && strpos($docContent, $queryWord) === false) {
-                            // Get configurable known false positive patterns
-                            $knownFalsePositivesJson = Config::get('katalysis.search.known_false_positives', $this->getDefaultKnownFalsePositives());
-                            $knownFalsePositives = json_decode($knownFalsePositivesJson, true) ?: [];
-                            
-                            $isKnownFalsePositive = false;
-                            foreach ($knownFalsePositives as $pattern) {
-                                if ($queryWord === $pattern['query'] && $titleWord === $pattern['false']) {
-                                    $isKnownFalsePositive = true;
-                                    break;
-                                }
-                            }
-                            
-                            // For known false positives, ALWAYS reject regardless of score
-                            // For other potential false positives, use stricter threshold
-                            if ($isKnownFalsePositive) {
-                                $shouldInclude = false;
-                                error_log("FAST FILTER: Rejecting '{$doc['title']}' - KNOWN false positive: '{$queryWord}' vs '{$titleWord}' (distance: {$distance}, score: {$doc['score']}) - ALWAYS REJECTED");
-                                break 2; // Break out of both loops
-                            } elseif ($doc['score'] < 0.75) { // Raised threshold for other cases
-                                $shouldInclude = false;
-                                error_log("FAST FILTER: Rejecting '{$doc['title']}' - potential false positive: '{$queryWord}' vs '{$titleWord}' (distance: {$distance}, score: {$doc['score']})");
-                                break 2; // Break out of both loops
-                            }
-                        }
-                    }
-                }
-            }
-            
-            if ($shouldInclude) {
-                $filteredDocs[] = $doc;
-            }
-        }
-        
-        return $filteredDocs;
     }
 
     private function truncateContent($content, $maxLength = 150)
@@ -1337,7 +2092,6 @@ class SearchSettings extends DashboardPageController
     private function getArticlesAndCaseStudiesBySpecialism($specialismId, $query, $maxArticles = 2, $maxCaseStudies = 2)
     {
         try {
-            error_log("SPECIALISM SUPPLEMENT: Getting articles and case studies for specialism ID: " . $specialismId);
             
             $db = Database::get();
             $supplementaryDocs = [];
@@ -1345,7 +2099,6 @@ class SearchSettings extends DashboardPageController
             // Get Specialisms attribute key
             $ak = CollectionKey::getByHandle('specialisms');
             if (!is_object($ak)) {
-                error_log("SPECIALISM SUPPLEMENT: 'specialisms' attribute key not found");
                 return [];
             }
             
@@ -1361,6 +2114,7 @@ class SearchSettings extends DashboardPageController
                 $allSupplementaryContent[] = [
                     'title' => $article['title'],
                     'url' => $article['url'],
+                    'content' => $article['content'] ?? $article['snippet'], // Prefer full content over snippet
                     'snippet' => $article['snippet'],
                     'score' => $article['relevance_score'],
                     'page_type' => 'article',
@@ -1374,6 +2128,7 @@ class SearchSettings extends DashboardPageController
                 $allSupplementaryContent[] = [
                     'title' => $caseStudy['title'],
                     'url' => $caseStudy['url'],
+                    'content' => $caseStudy['content'] ?? $caseStudy['snippet'], // Prefer full content over snippet
                     'snippet' => $caseStudy['snippet'],
                     'score' => $caseStudy['relevance_score'],
                     'page_type' => 'case_study',
@@ -1412,9 +2167,7 @@ class SearchSettings extends DashboardPageController
             }
             
             // Log debug information showing top 10 overall
-            error_log("QUERY PRIORITIZATION DEBUG: Top 10 combined articles and case studies by score:");
             foreach ($top10ForDebug as $i => $item) {
-                error_log("  " . ($i + 1) . ". '{$item['title']}' ({$item['page_type']}) - Score: {$item['relevance_score']} - {$item['selection_reason']}");
             }
             
             // Convert selected items to supplementary docs format for main display
@@ -1422,8 +2175,10 @@ class SearchSettings extends DashboardPageController
                 $supplementaryDocs[] = [
                     'title' => $article['title'],
                     'url' => $article['url'],
-                    'snippet' => $article['snippet'],
+                    'content' => $article['content'], // Use full content instead of snippet
+                    'snippet' => $article['snippet'], // Keep snippet for compatibility
                     'score' => $article['relevance_score'],
+                    'type' => 'article', // Use 'type' field for consistency with other results
                     'page_type' => 'article',
                     'content_source' => 'specialism_supplement',
                     'badge' => 'Article',
@@ -1436,8 +2191,10 @@ class SearchSettings extends DashboardPageController
                 $supplementaryDocs[] = [
                     'title' => $caseStudy['title'],
                     'url' => $caseStudy['url'],
-                    'snippet' => $caseStudy['snippet'],
+                    'content' => $caseStudy['content'], // Use full content instead of snippet
+                    'snippet' => $caseStudy['snippet'], // Keep snippet for compatibility
                     'score' => $caseStudy['relevance_score'],
+                    'type' => 'case_study', // Use 'type' field for consistency with other results
                     'page_type' => 'case_study',
                     'content_source' => 'specialism_supplement',
                     'badge' => 'Case Study',
@@ -1446,7 +2203,6 @@ class SearchSettings extends DashboardPageController
                 ];
             }
             
-            error_log("SPECIALISM SUPPLEMENT: Selected " . count($topArticles) . " articles and " . count($topCaseStudies) . " case studies based on query relevance");
             
             // Prepare debug info using the top 10 combined items we already calculated
             $allSupplementaryForDebug = [];
@@ -1474,7 +2230,6 @@ class SearchSettings extends DashboardPageController
             ];
             
         } catch (\Exception $e) {
-            error_log("SPECIALISM SUPPLEMENT: Error getting articles and case studies: " . $e->getMessage());
             return [];
         }
     }
@@ -1485,17 +2240,18 @@ class SearchSettings extends DashboardPageController
     private function getAndPrioritizeContentBySpecialism($pageType, $specialismId, $query, $maxResults, $attributeKey)
     {
         try {
-            error_log("QUERY PRIORITIZATION: Processing {$pageType} content for query: '{$query}'");
             
             // Create PageList to get content by specialism
             $pageList = new PageList();
-            $pageList->filterByPageTypeID($this->getPageTypeID($pageType));
+            $pageTypeObj = PageType::getByHandle($pageType);
+            if ($pageTypeObj) {
+                $pageList->filterByPageTypeID($pageTypeObj->getPageTypeID());
+            }
             $attributeKey->getController()->filterByAttribute($pageList, $specialismId);
             $pageList->sortByPublicDateDescending();
             $pageList->setItemsPerPage($maxResults);
             $pages = $pageList->getResults();
             
-            error_log("QUERY PRIORITIZATION: Found " . count($pages) . " {$pageType} pages for specialism {$specialismId}");
             
             $scoredContent = [];
             $queryWords = $this->extractQueryWords($query);
@@ -1505,19 +2261,60 @@ class SearchSettings extends DashboardPageController
                 $description = $page->getCollectionDescription() ?: '';
                 $url = $page->getCollectionPath();
                 
+                // Get page type information
+                $pageTypeObj = $page->getPageTypeObject();
+                $pageTypeHandle = $pageTypeObj ? $pageTypeObj->getPageTypeHandle() : '';
+                
+                // Extract more comprehensive content for better descriptions
+                $fullContent = $description;
+                
+                // Try to get meta description if collection description is empty
+                if (empty($fullContent)) {
+                    $metaDescription = $page->getAttribute('meta_description');
+                    if (!empty($metaDescription)) {
+                        $fullContent = $metaDescription;
+                    }
+                }
+                
+                // As a last resort, try to get content from page blocks (if still empty)
+                if (empty($fullContent)) {
+                    try {
+                        // Get the main area content
+                        $mainArea = $page->getArea('Main');
+                        if ($mainArea && method_exists($mainArea, 'getAreaDisplayName')) {
+                            $blocks = $mainArea->getAreaBlocksArray($page);
+                            $textContent = '';
+                            foreach ($blocks as $block) {
+                                if ($block->getBlockTypeHandle() === 'content') {
+                                    $controller = $block->getController();
+                                    if (method_exists($controller, 'getContent')) {
+                                        $textContent .= strip_tags($controller->getContent()) . ' ';
+                                    }
+                                }
+                            }
+                            if (!empty($textContent)) {
+                                $fullContent = trim($textContent);
+                            }
+                        }
+                    } catch (\Exception $blockError) {
+                    }
+                }
+                
                 // Calculate query-based relevance score
-                $relevanceScore = $this->calculateContentRelevanceScore($title, $description, $queryWords, $page->getCollectionDatePublic());
+                $relevanceScore = $this->calculateContentRelevanceScore($title, $fullContent, $queryWords, $page->getCollectionDatePublic());
                 
                 $scoredContent[] = [
                     'title' => $title,
                     'url' => $url,
-                    'snippet' => $this->truncateContent($description, 150),
+                    'content' => $fullContent, // Full content for frontend use
+                    'snippet' => $this->truncateContent($fullContent, 150), // Truncated for compatibility
+                    'page_type' => $pageType, // Use the passed page type
+                    'page_type_handle' => $pageTypeHandle, // Store the actual CMS page type handle
                     'relevance_score' => $relevanceScore,
                     'publication_date' => $page->getCollectionDatePublic(),
-                    'selection_reason' => $this->getSelectionReason($relevanceScore, $queryWords, $title, $description)
+                    'selection_reason' => $this->getSelectionReason($relevanceScore, $queryWords, $title, $fullContent)
                 ];
                 
-                error_log("QUERY PRIORITIZATION: {$pageType} '{$title}' scored {$relevanceScore}");
             }
             
             // Sort by relevance score (highest first)
@@ -1525,12 +2322,10 @@ class SearchSettings extends DashboardPageController
                 return $b['relevance_score'] <=> $a['relevance_score'];
             });
             
-            error_log("QUERY PRIORITIZATION: Sorted " . count($scoredContent) . " {$pageType} items by relevance");
             
             return $scoredContent;
             
         } catch (\Exception $e) {
-            error_log("Error prioritizing {$pageType} content: " . $e->getMessage());
             return [];
         }
     }
@@ -1550,7 +2345,6 @@ class SearchSettings extends DashboardPageController
             return strlen($word) > 2 && !in_array($word, $stopWords);
         });
         
-        error_log("QUERY WORDS: Extracted meaningful words: " . implode(', ', $meaningfulWords));
         
         return array_values($meaningfulWords); // Re-index array
     }
@@ -1581,22 +2375,18 @@ class SearchSettings extends DashboardPageController
             if (preg_match('/\b' . preg_quote($wordLower, '/') . '\b/', $titleLower)) {
                 $score += 0.25;
                 $exactMatches++;
-                error_log("SCORING: Exact title match for '$word' in '$title'");
             } elseif (strpos($titleLower, $wordLower) !== false) {
                 $score += 0.15; // Partial title match
                 $partialMatches++;
-                error_log("SCORING: Partial title match for '$word' in '$title'");
             }
             
             // Description matches (medium weight)
             if (preg_match('/\b' . preg_quote($wordLower, '/') . '\b/', $descriptionLower)) {
                 $score += 0.12;
                 $exactMatches++;
-                error_log("SCORING: Exact description match for '$word'");
             } elseif (strpos($descriptionLower, $wordLower) !== false) {
                 $score += 0.08; // Partial description match
                 $partialMatches++;
-                error_log("SCORING: Partial description match for '$word'");
             }
         }
         
@@ -1605,14 +2395,12 @@ class SearchSettings extends DashboardPageController
         if (strlen($queryPhrase) > 5) {
             if (strpos($allContent, $queryPhrase) !== false) {
                 $score += 0.25; // Increased bonus for exact phrase match
-                error_log("SCORING: Exact phrase match for '$queryPhrase'");
             }
         }
         
         // Multiple exact match bonus (progressive scoring)
         if ($exactMatches > 1) {
             $score += ($exactMatches - 1) * 0.1;
-            error_log("SCORING: Multiple exact match bonus: " . (($exactMatches - 1) * 0.1));
         }
         
         // Coverage bonus - reward content that matches more of the query terms
@@ -1621,7 +2409,6 @@ class SearchSettings extends DashboardPageController
             $coverage = ($exactMatches + ($partialMatches * 0.5)) / $totalQueryWords;
             $coverageBonus = $coverage * 0.15; // Up to 0.15 bonus for full coverage
             $score += $coverageBonus;
-            error_log("SCORING: Coverage bonus: $coverageBonus (coverage: $coverage)");
         }
         
         // Recency bonus (newer content gets slight boost)
@@ -1631,10 +2418,8 @@ class SearchSettings extends DashboardPageController
                 $monthsOld = (time() - $timestamp) / (30 * 24 * 60 * 60);
                 if ($monthsOld < 6) {
                     $score += 0.05;
-                    error_log("SCORING: Recent content bonus (< 6 months)");
                 } elseif ($monthsOld < 12) {
                     $score += 0.03;
-                    error_log("SCORING: Moderate recency bonus (< 12 months)");
                 }
             }
         }
@@ -1642,7 +2427,6 @@ class SearchSettings extends DashboardPageController
         // Title length penalty (favor concise, focused titles)
         if (strlen($title) > 80) {
             $score -= 0.02;
-            error_log("SCORING: Long title penalty");
         }
         
         // Cap the score at 0.95 to ensure variation in results
@@ -1665,253 +2449,6 @@ class SearchSettings extends DashboardPageController
         } else {
             return 'Basic specialism match';
         }
-    }
-    
-    private function getPageTypeID($handle)
-    {
-        try {
-            $db = Database::get();
-            $ptID = $db->GetOne("SELECT ptID FROM PageTypes WHERE ptHandle = ?", [$handle]);
-            return $ptID ? (int)$ptID : 0;
-        } catch (\Exception $e) {
-            error_log("Error getting page type ID for '{$handle}': " . $e->getMessage());
-            return 0;
-        }
-    }
-
-    private function findBestMatchingSpecialism($serviceArea, $query, $allSpecialisms)
-    {
-        try {
-            error_log("SPECIALISM MATCHING: AI selected service area: '{$serviceArea}' for query: '{$query}'");
-            error_log("SPECIALISM MATCHING: Available specialisms: " . implode(', ', array_column($allSpecialisms, 'treeNodeName')));
-            
-            // First, try exact match (prefer child specialisms over parent ones)
-            $exactMatches = [];
-            foreach ($allSpecialisms as $specialism) {
-                if (strcasecmp($specialism['treeNodeName'], $serviceArea) === 0) {
-                    $exactMatches[] = $specialism;
-                }
-            }
-            
-            if (!empty($exactMatches)) {
-                // If we have multiple exact matches, prefer child specialisms (those with a parent)
-                $childMatches = array_filter($exactMatches, function($s) {
-                    return !empty($s['parentName']);
-                });
-                
-                $bestMatch = !empty($childMatches) ? $childMatches[0] : $exactMatches[0];
-                error_log("SPECIALISM MATCHING: Found exact match for '{$serviceArea}' - '{$bestMatch['treeNodeName']}' (ID: {$bestMatch['treeNodeID']})");
-                return $bestMatch['treeNodeID'];
-            }
-            
-            // Second, try partial matches (prefer child specialisms)
-            $partialMatches = [];
-            foreach ($allSpecialisms as $specialism) {
-                if (stripos($specialism['treeNodeName'], $serviceArea) !== false || 
-                    stripos($serviceArea, $specialism['treeNodeName']) !== false) {
-                    $partialMatches[] = $specialism;
-                }
-            }
-            
-            if (!empty($partialMatches)) {
-                // Prefer child specialisms over parent ones
-                $childMatches = array_filter($partialMatches, function($s) {
-                    return !empty($s['parentName']);
-                });
-                
-                $bestMatch = !empty($childMatches) ? $childMatches[0] : $partialMatches[0];
-                error_log("SPECIALISM MATCHING: Found partial match: '{$bestMatch['treeNodeName']}' (ID: {$bestMatch['treeNodeID']}) for '{$serviceArea}'");
-                return $bestMatch['treeNodeID'];
-            }
-            
-            // Third, try semantic matching for known child categories (fallback to parent)
-            $semanticMatches = [
-                'road accident' => 'Injury Claims',
-                'car accident' => 'Injury Claims', 
-                'vehicle accident' => 'Injury Claims',
-                'traffic accident' => 'Injury Claims',
-                'rta' => 'Injury Claims',
-                'motorbike accident' => 'Injury Claims',
-                'motorcycle accident' => 'Injury Claims',
-                'pedestrian accident' => 'Injury Claims',
-                'work accident' => 'Injury Claims',
-                'workplace accident' => 'Injury Claims',
-                'serious injury' => 'Injury Claims'
-            ];
-            
-            $serviceAreaLower = strtolower($serviceArea);
-            if (isset($semanticMatches[$serviceAreaLower])) {
-                $parentSpecialism = $semanticMatches[$serviceAreaLower];
-                foreach ($allSpecialisms as $specialism) {
-                    if (strcasecmp($specialism['treeNodeName'], $parentSpecialism) === 0) {
-                        error_log("SPECIALISM MATCHING: Found semantic parent match: '{$specialism['treeNodeName']}' (ID: {$specialism['treeNodeID']}) for child '{$serviceArea}'");
-                        return $specialism['treeNodeID'];
-                    }
-                }
-            }
-            
-            error_log("SPECIALISM MATCHING: No match found for '{$serviceArea}'");
-            return null;
-            
-        } catch (\Exception $e) {
-            error_log("Error in findBestMatchingSpecialism: " . $e->getMessage());
-            return null;
-        }
-    }
-    
-    private function getSpecialistRecommendations($query, $intent = [])
-    {
-        try {
-            // OPTIMIZATION: Use specialism_id directly if available (like reviews optimization)
-            if (($intent['intent_type'] ?? null) === 'service' && !empty($intent['specialism_id'] ?? null)) {
-                error_log("Fast specialists search using specialism ID: " . $intent['specialism_id']);
-                $specialists = $this->getSpecialistsByService($intent, 3);
-                if (!empty($specialists)) {
-                    return $specialists;
-                }
-            }
-            
-            // For service-specific queries without specialism ID, use service area
-            if (($intent['intent_type'] ?? null) === 'service' && !empty($intent['service_area'] ?? null)) {
-                error_log("Specialists search using service area: " . $intent['service_area']);
-                $specialists = $this->getSpecialistsByService($intent['service_area'], 3);
-                if (!empty($specialists)) {
-                    return $specialists;
-                }
-            }
-            
-            // No AI vector search fallback - return empty if no specialism match
-            error_log("No specialism ID or service area found - no specialists returned");
-            return [];
-            
-        } catch (\Exception $e) {
-            error_log('Error getting specialist recommendations: ' . $e->getMessage());
-            return [];
-        }
-    }
-    
-
-
-    
-    /**
-     * Get office information for a specialist
-     */
-    private function getSpecialistOfficeInfo($specialistId): array
-    {
-        try {
-            // Try to get specialist's location information from Person object
-            $personObj = \Concrete\Package\KatalysisPro\Src\KatalysisPro\People\Person::getByID($specialistId);
-            if ($personObj) {
-                $places = $personObj->getPlaces($specialistId);
-                if (!empty($places) && is_array($places)) {
-                    $place = $places[0]; // Use first associated place
-                    return [
-                        'name' => $place['name'] ?? '',
-                        'address' => trim(($place['address1'] ?? '') . ' ' . ($place['address2'] ?? '')),
-                        'town' => $place['town'] ?? '',
-                        'county' => $place['county'] ?? '',
-                        'postcode' => $place['postcode'] ?? '',
-                        'phone' => $place['phone'] ?? '',
-                        'email' => $place['email'] ?? ''
-                    ];
-                }
-            }
-            
-            // Fallback: Try to get office info from database
-            $db = Database::get();
-            $placeData = $db->GetRow("
-                SELECT kp.name, kp.address1, kp.address2, kp.town, kp.county, kp.postcode, kp.phone, kp.email
-                FROM KatalysisPlaces kp
-                INNER JOIN KatalysisPeoplePlaces kpp ON kp.pID = kpp.placeID
-                WHERE kpp.personID = ? 
-                AND kp.active = 1
-                LIMIT 1
-            ", [$specialistId]);
-            
-            if ($placeData) {
-                return [
-                    'name' => $placeData['name'] ?? '',
-                    'address' => trim(($placeData['address1'] ?? '') . ' ' . ($placeData['address2'] ?? '')),
-                    'town' => $placeData['town'] ?? '',
-                    'county' => $placeData['county'] ?? '',
-                    'postcode' => $placeData['postcode'] ?? '',
-                    'phone' => $placeData['phone'] ?? '',
-                    'email' => $placeData['email'] ?? ''
-                ];
-            }
-            
-        } catch (\Exception $e) {
-            error_log("Error getting office info for specialist $specialistId: " . $e->getMessage());
-        }
-        
-        return []; // Return empty array if no office found
-    }
-    
-
-    
-    /**
-     * Extract location name from search query for distance calculation
-     */
-    private function extractLocationFromQuery($query): ?string
-    {
-        $query = strtolower($query);
-        
-        // Look for "in [location]" or "near [location]" patterns
-        if (preg_match('/\b(?:in|near)\s+([a-z\s]+)$/i', $query, $matches)) {
-            return trim($matches[1]);
-        }
-        
-        // Look for location names directly in the query
-        $locations = [
-            'llangollen', 'wrexham', 'chester', 'rhyl', 'shotton', 'colwyn bay',
-            'ellesmere port', 'wallasey', 'bangor', 'caernarfon', 'prestatyn',
-            'mold', 'ruthin', 'denbigh', 'flint', 'holywell', 'buckley'
-        ];
-        
-        foreach ($locations as $location) {
-            if (strpos($query, $location) !== false) {
-                return $location;
-            }
-        }
-        
-        return null;
-    }
-    
-
-    
-
-    
-    /**
-     * Calculate location match score for a specialist
-     */
-    private function calculateLocationMatch($specialist, $locationKeywords): float
-    {
-        $score = 0;
-        
-        // Try to get specialist's location information from Person object
-        try {
-            $personObj = \Concrete\Package\KatalysisPro\Src\KatalysisPro\People\Person::getByID($specialist['sID']);
-            if ($personObj) {
-                $places = $personObj->getPlaces($specialist['sID']);
-                if (!empty($places)) {
-                    foreach ($places as $place) {
-                        $placeName = strtolower($place['name'] ?? '');
-                        
-                        // Check if any location keyword matches this place
-                        foreach ($locationKeywords as $keyword) {
-                            if (strpos($placeName, strtolower($keyword)) !== false) {
-                                $score += 3; // Strong location match
-                                error_log("Location match: {$specialist['name']} works in {$placeName}, matches keyword: {$keyword}");
-                            }
-                        }
-                    }
-                }
-            }
-        } catch (\Exception $e) {
-            error_log("Error getting location info for specialist {$specialist['sID']}: " . $e->getMessage());
-        }
-        
-        return $score;
     }
     
     private function mapJobTitleToExpertise($jobTitle, $department = '')
@@ -1937,96 +2474,67 @@ class SearchSettings extends DashboardPageController
             return 'General Practice';
         }
     }
-    
-    private function findSpecialismsByQuery($query)
-    {
-        try {
-            // Simple keyword matching with specialisms from TreeNodes
-            $db = Database::get();
-            $keywords = explode(' ', strtolower($query));
-            $likeConditions = [];
-            $params = [];
-            
-            foreach ($keywords as $i => $keyword) {
-                if (strlen($keyword) > 2) { // Only search for words longer than 2 characters
-                    $likeConditions[] = "LOWER(TreeNodes.treeNodeName) LIKE ?";
-                    $params[] = '%' . $keyword . '%';
-                }
-            }
-            
-            if (empty($likeConditions)) {
-                return [];
-            }
-            
-            $sql = "SELECT DISTINCT TreeNodes.treeNodeID FROM TreeNodes WHERE " . implode(' OR ', $likeConditions);
-            $results = $db->GetAll($sql, $params);
-            
-            return array_column($results, 'treeNodeID');
-            
-        } catch (\Exception $e) {
-            error_log('Error finding specialisms by query: ' . $e->getMessage());
-            return [];
-        }
-    }
 
-    private function getRelevantReviews($query)
+    /**
+     * Get location keywords dynamically from PlaceList instead of hard-coded arrays
+     */
+    private function getLocationKeywords(): array
     {
         try {
-            error_log("Starting AI-powered review search with query: " . $query);
+            // Get all active places using PlaceList
+            $placeList = new PlaceList();
+            $placeList->filterByActive();
+            $places = $placeList->getResults();
             
-            // Try AI vector search first
-            try {
-                $vectorBuilder = new \KatalysisProAi\KatalysisProIndexService();
-                $reviews = $vectorBuilder->searchReviews($query, 3);
+            $locationKeywords = [];
+            $placeNames = [];
+            
+            foreach ($places as $place) {
+                // Add place name variations
+                if (!empty($place->name)) {
+                    $placeName = strtolower(trim($place->name));
+                    if (!in_array($placeName, $placeNames)) {
+                        $placeNames[] = $placeName;
+                        $locationKeywords[] = $placeName;
+                    }
+                }
                 
-                if (!empty($reviews)) {
-                    error_log("Found " . count($reviews) . " reviews using AI vector search");
-                    return $reviews;
+                // Add town names
+                if (!empty($place->town)) {
+                    $townName = strtolower(trim($place->town));
+                    if (!in_array($townName, $locationKeywords)) {
+                        $locationKeywords[] = $townName;
+                        $placeNames[] = $townName;
+                    }
                 }
-            } catch (\Exception $e) {
-                error_log("Vector search error for reviews: " . $e->getMessage());
-            }
-            
-            // Fallback to error if vector search fails
-            return [['error' => 'Review search failed - AI vector search unavailable']];
-            
-        } catch (\Exception $e) {
-            error_log('Error getting relevant reviews: ' . $e->getMessage());
-            error_log('Error trace: ' . $e->getTraceAsString());
-            return [['error' => 'Review search failed: ' . $e->getMessage()]];
-        }
-    }
-    
-
-    
-
-    
-    private function getPlaceRecommendations($query)
-    {
-        try {
-            // Try AI vector search first
-            try {
-                $vectorBuilder = new \KatalysisProAi\KatalysisProIndexService();
-                $places = $vectorBuilder->searchPlaces($query, 3);
                 
-                if (!empty($places)) {
-                    return $places;
+                // Add county names
+                if (!empty($place->county)) {
+                    $countyName = strtolower(trim($place->county));
+                    if (!in_array($countyName, $locationKeywords)) {
+                        $locationKeywords[] = $countyName;
+                    }
                 }
-            } catch (\Exception $e) {
-                error_log("Vector search error for places: " . $e->getMessage());
             }
             
-            // Fallback: return error if vector search fails
-            return [['error' => 'Place search unavailable']];
+            // Add generic location keywords
+            $genericKeywords = ['office', 'offices', 'location', 'locations', 'near', 'visit'];
+            $locationKeywords = array_merge($locationKeywords, $genericKeywords);
+            
+            return [
+                'locationKeywords' => array_unique($locationKeywords),
+                'placeNames' => array_unique($placeNames)
+            ];
             
         } catch (\Exception $e) {
-            error_log('Error getting place recommendations: ' . $e->getMessage());
-            return [['error' => 'Place search failed: ' . $e->getMessage()]];
+            // Fallback to basic keywords if PlaceList fails
+            return [
+                'locationKeywords' => ['office', 'offices', 'location', 'locations', 'near', 'visit'],
+                'placeNames' => []
+            ];
         }
     }
-    
 
-    
     private function logSearch($query, $blockId, $aiResponse = '', $intent = [], $fullResults = [])
     {
         try {
@@ -2114,10 +2622,8 @@ class SearchSettings extends DashboardPageController
             $entityManager->persist($search);
             $entityManager->flush();
             
-            error_log("Search logged to database: ID {$search->getId()}, Query: {$query}, Response Length: " . strlen($aiResponse));
             
         } catch (\Exception $e) {
-            error_log('Database search logging failed: ' . $e->getMessage());
             
             // Fallback to file-based logging if database logging fails
             try {
@@ -2140,7 +2646,6 @@ class SearchSettings extends DashboardPageController
                 
                 file_put_contents($logFile, json_encode($logEntry) . "\n", FILE_APPEND | LOCK_EX);
             } catch (\Exception $fileLogException) {
-                error_log('File fallback logging also failed: ' . $fileLogException->getMessage());
             }
         }
     }
@@ -2151,124 +2656,78 @@ class SearchSettings extends DashboardPageController
     }
     
     /**
-     * Get specialisms from the Specialisms topic tree using TopicTree::getByName()
+     * Get specialisms from the Specialisms topic tree using Concrete CMS TopicTree methods
      * Returns only the actual specialisms, not all TreeNodes
      */
     private function getSpecialisms(): array
     {
         try {
-            $db = Database::get();
-            
-            // Get the Specialisms tree using TopicTree::getByName()
+            // Use proper Concrete CMS TopicTree API
             $specialismsTree = TopicTree::getByName('Specialisms');
+            
             if (!$specialismsTree) {
-                error_log("WARNING: Specialisms tree not found by name");
                 return [];
             }
             
-            $specialismsTreeId = $specialismsTree->getRootTreeNodeID();
-            error_log("Found Specialisms tree with root ID: " . $specialismsTreeId);
+            // Get tree ID for database query
+            $treeID = $specialismsTree->getTreeID();
             
-            // Get ALL nodes in the Specialisms tree (including children) by checking the tree path
-            // This will give us both parent and child specialisms like "Injury Claims" and "Road Accident"
-            $specialisms = $db->GetAll("
-                SELECT tn.treeNodeID, tn.treeNodeName, tn.treeNodeParentID,
-                       parent.treeNodeName as parentName
-                FROM TreeNodes tn
-                LEFT JOIN TreeNodes parent ON tn.treeNodeParentID = parent.treeNodeID
-                WHERE tn.treeID = (SELECT treeID FROM TreeNodes WHERE treeNodeID = ?)
-                AND tn.treeNodeID != ?
-                ORDER BY tn.treeNodeParentID, tn.treeNodeName
-            ", [$specialismsTreeId, $specialismsTreeId]);
-            
-            if (empty($specialisms)) {
-                error_log("WARNING: No specialisms found in Specialisms tree (root ID: " . $specialismsTreeId . ")");
-                return [];
-            }
-            
-            // Log the full hierarchy for debugging
-            $topLevel = array_filter($specialisms, function($s) use ($specialismsTreeId) { 
-                return $s['treeNodeParentID'] == $specialismsTreeId; 
-            });
-            $children = array_filter($specialisms, function($s) use ($specialismsTreeId) { 
-                return $s['treeNodeParentID'] != $specialismsTreeId; 
-            });
-            
-            error_log("Found " . count($specialisms) . " total specialisms (" . count($topLevel) . " top-level, " . count($children) . " children)");
-            error_log("Top-level specialisms: " . implode(', ', array_column($topLevel, 'treeNodeName')));
-            if (!empty($children)) {
-                foreach ($children as $child) {
-                    error_log("Child specialism: '{$child['treeNodeName']}' (parent: {$child['parentName']}, ID: {$child['treeNodeID']})");
+            // Use database query approach since getChildNodes() API isn't working properly
+            try {
+                $db = Database::get();
+                
+                // Get all nodes in the tree (excluding root node with NULL parent)
+                $nodes = $db->fetchAll(
+                    'SELECT treeNodeID, treeNodeName, treeNodeParentID FROM TreeNodes WHERE treeID = ? AND treeNodeParentID IS NOT NULL ORDER BY treeNodeName',
+                    [$treeID]
+                );
+                
+                if (count($nodes) === 0) {
+                    return [];
                 }
+                
+                $specialisms = [];
+                
+                // Convert database results to expected format
+                // Only include actual specialisms (nodes that could be leaf nodes or have meaningful names)
+                foreach ($nodes as $node) {
+                    $nodeName = $node['treeNodeName'];
+                    
+                    // Skip root node name itself
+                    if ($nodeName === 'Specialisms') {
+                        continue;
+                    }
+                    
+                    $specialisms[] = [
+                        'treeNodeID' => $node['treeNodeID'],
+                        'treeNodeName' => $nodeName,
+                        'treeNodeParentID' => $node['treeNodeParentID'],
+                        'parentName' => null // We'll determine parent relationships if needed
+                    ];
+                }
+                
+                return $specialisms;
+                
+            } catch (\Exception $e) {
+                error_log("Error querying specialisms from database: " . $e->getMessage());
+                return [];
             }
-            
-            return $specialisms;
             
         } catch (\Exception $e) {
-            error_log("Error getting specialisms from tree: " . $e->getMessage());
-            return [];
-        }
-    }
-    
-    /**
-     * Build optimized query based on intent analysis
-     */
-    private function buildIntentBasedQuery($query, $intent): string
-    {
-        // Use comprehensive prompts for detailed AI responses
-        switch ($intent['intent_type']) {
-            case 'service':
-                return "Based on the search query '{$query}', provide a comprehensive explanation that includes:
-
-1. DIRECT ANSWER: Answer the specific question or query asked
-2. RELATED SERVICES: Detail all relevant legal services, expertise areas, and specializations we offer that relate to this query
-3. OUR CAPABILITIES: Explain our firm's specific experience, qualifications, and track record in these areas
-4. PRACTICAL GUIDANCE: Provide helpful information, next steps, or considerations related to this topic
-5. WHY CHOOSE US: Highlight what makes our approach or expertise distinctive in this area
-
-Please structure your response to be informative and comprehensive, helping the user understand both the answer to their query and the full scope of how we can assist them in this area of law. Use a professional but accessible tone.
-
-Query: {$query}";
-                
-            case 'location':
-                $location = $intent['location_mentioned'] ?? 'your area';
-                return "Based on the search query '{$query}' and location '{$location}', provide a comprehensive response that includes:
-
-1. DIRECT ANSWER: Address the specific location-related query
-2. OUR OFFICES: Detail our office locations, services available, and accessibility in {$location}
-3. LOCAL EXPERTISE: Explain our experience and knowledge of local legal matters and regulations
-4. CONTACT INFORMATION: Provide relevant contact details, addresses, and directions
-5. WHY CHOOSE OUR LOCAL SERVICES: Highlight the benefits of our local presence and community connections
-
-Use a professional but welcoming tone that demonstrates our local knowledge and accessibility.
-
-Query: {$query}";
-                
-            case 'situation':
-                return "Based on the search query '{$query}', provide a comprehensive response that includes:
-
-1. DIRECT ANSWER: Address the specific legal situation or concern
-2. IMMEDIATE GUIDANCE: Explain what the person should do right now and any urgent considerations
-3. OUR SERVICES: Detail how our legal services can help with this specific situation
-4. PROCESS OVERVIEW: Outline the typical legal process, timeline, and what to expect
-5. NEXT STEPS: Provide clear guidance on how to proceed and contact us for assistance
-
-Use a reassuring and professional tone that demonstrates our expertise while being accessible to non-lawyers.
-
-Query: {$query}";
-                
-            default: // information
-                return "Based on the search query '{$query}', provide a comprehensive explanation that includes:
-
-1. DIRECT ANSWER: Answer the specific question or query asked
-2. RELATED INFORMATION: Provide relevant context, background, and related legal concepts
-3. OUR EXPERTISE: Explain our firm's knowledge and experience in this area
-4. PRACTICAL GUIDANCE: Offer helpful information, considerations, or next steps
-5. HOW WE CAN HELP: Detail the specific ways our legal services can assist with related matters
-
-Please structure your response to be informative and comprehensive, helping the user understand the topic and how we can assist them. Use a professional but accessible tone.
-
-Query: {$query}";
+            error_log("Error loading specialisms TopicTree: " . $e->getMessage());
+            
+            // Fallback: Basic specialisms for law firms
+            // This ensures the feature continues to work even if TopicTree has issues
+            return [
+                ['treeNodeID' => 1, 'treeNodeName' => 'Personal Injury', 'treeNodeParentID' => null],
+                ['treeNodeID' => 2, 'treeNodeName' => 'Medical Negligence', 'treeNodeParentID' => null],
+                ['treeNodeID' => 3, 'treeNodeName' => 'Employment Law', 'treeNodeParentID' => null],
+                ['treeNodeID' => 4, 'treeNodeName' => 'Family Law', 'treeNodeParentID' => null],
+                ['treeNodeID' => 5, 'treeNodeName' => 'Conveyancing', 'treeNodeParentID' => null],
+                ['treeNodeID' => 6, 'treeNodeName' => 'Wills & Probate', 'treeNodeParentID' => null],
+                ['treeNodeID' => 7, 'treeNodeName' => 'Commercial Law', 'treeNodeParentID' => null],
+                ['treeNodeID' => 8, 'treeNodeName' => 'Litigation', 'treeNodeParentID' => null]
+            ];
         }
     }
     
@@ -2282,45 +2741,63 @@ Query: {$query}";
             
             // For person-specific queries, search by name first
             if (($intent['intent_type'] ?? null) === 'person' && !empty($intent['person_name'] ?? null)) {
-                error_log("Using person-based specialist search for: " . $intent['person_name']);
                 $personResults = $this->getSpecialistsByName($intent['person_name'], $maxSpecialists);
                 if (!empty($personResults)) {
                     return $personResults;
                 }
                 // If no exact name match, fall through to other search methods
-                error_log("No exact person match found for '{$intent['person_name']}', trying other methods");
             }
             
-            // For service-specific queries, use specialism-based filtering
-            if (($intent['intent_type'] ?? null) === 'service' && !empty($intent['service_area'] ?? null)) {
-                error_log("Using specialism-based specialist search for service: " . $intent['service_area']);
-                // FIXED: Pass the full intent object instead of just the service area string
-                return $this->getSpecialistsByService($intent, $maxSpecialists);
+            // PRIORITY 1: Always try specialism-based search first if we have service area or specialism_id
+            if (!empty($intent['service_area'] ?? null) || !empty($intent['specialism_id'] ?? null)) {
+                $specialismResults = $this->getSpecialistsByService($intent, $maxSpecialists);
+                if (!empty($specialismResults)) {
+                    return $specialismResults;
+                }
             }
             
-            // For location queries, prioritize local specialists
+            // PRIORITY 2: For location queries, prioritize local specialists (only if no specialism match)
             if (($intent['intent_type'] ?? null) === 'location' && ($intent['location_mentioned'] ?? null)) {
                 return $this->getSpecialistsByLocation($intent['location_mentioned'], $maxSpecialists);
             }
             
-            // For urgent situations, get most experienced specialists
-            if (($intent['urgency_level'] ?? null) === 'high') {
+            // PRIORITY 3: Location-only search (only if no service area/specialism was identified)
+            if (empty($intent['service_area'] ?? null) && empty($intent['specialism_id'] ?? null)) {
+                // Check if query contains location words using dynamic PlaceList data
+                $locationData = $this->getLocationKeywords();
+                $locationKeywords = $locationData['locationKeywords'];
+                $placeNames = $locationData['placeNames'];
+                $queryLower = strtolower($query);
+                
+                foreach ($locationKeywords as $keyword) {
+                    if (strpos($queryLower, $keyword) !== false) {
+                        
+                        // If it's a specific place name, search by that location
+                        foreach ($placeNames as $placeName) {
+                            if (strpos($queryLower, $placeName) !== false) {
+                                return $this->getSpecialistsByLocation($placeName, $maxSpecialists);
+                            }
+                        }
+                        
+                        // If location mentioned in intent, use that
+                        if (!empty($intent['location_mentioned'])) {
+                            return $this->getSpecialistsByLocation($intent['location_mentioned'], $maxSpecialists);
+                        }
+                        
+                        break; // Found location keyword but no specific place
+                    }
+                }
+            }
+            
+            // PRIORITY 4: For urgent situations, get most experienced specialists
+            if (($intent['urgency'] ?? null) === 'high') {
                 return $this->getSeniorSpecialists($maxSpecialists);
             }
             
-            // Default: try specialism-based search with the full intent object
-            error_log("Using specialism-based search for general query: " . $query);
-            $specialismResults = $this->getSpecialistsByService($intent, $maxSpecialists);
-            
-            if (!empty($specialismResults)) {
-                return $specialismResults;
-            }
-            
-            // Return error instead of fallback
-            return [['error' => 'No specialist search strategy could be applied for this query']];
+            // FINAL FALLBACK: No specialist search strategy could be applied for this query
+            return [['error' => 'No matching specialists found for the specified criteria']];
             
         } catch (\Exception $e) {
-            error_log("Targeted specialist search error: " . $e->getMessage());
             return [['error' => 'Specialist search failed: ' . $e->getMessage()]];
         }
     }
@@ -2331,17 +2808,19 @@ Query: {$query}";
     private function getTargetedReviews($query, $intent): array
     {
         try {
-            // OPTIMIZATION: Use specialism_id directly if available (much faster)
-            if (($intent['intent_type'] ?? null) === 'service' && !empty($intent['specialism_id'] ?? null)) {
+            // ENHANCED: Use specialism_id for service AND help queries (much faster)
+            $intentType = $intent['intent_type'] ?? null;
+            $specialismId = $intent['specialism_id'] ?? null;
+            
+            if (in_array($intentType, ['service', 'help', 'information']) && !empty($specialismId)) {
                 $serviceArea = $intent['service_area'] ?? '';
-                return $this->getReviewsBySpecialismId($intent['specialism_id'], $serviceArea);
+                return $this->getReviewsBySpecialismId($specialismId, $serviceArea);
             }
             
-            // For other queries without specialism_id, return general high-rating reviews as fallback
-            return $this->getGeneralHighRatingReviews();
+            // For other queries without specialism_id, return featured reviews as fallback
+            return $this->getFeaturedReviews();
             
         } catch (\Exception $e) {
-            error_log("Targeted review search error: " . $e->getMessage());
             return [['error' => 'Review search failed: ' . $e->getMessage()]];
         }
     }
@@ -2352,38 +2831,52 @@ Query: {$query}";
     private function getTargetedPlaces($query, $intent): array
     {
         try {
-            // OPTIMIZATION: Only search for places when location is relevant to the query
             
             // For explicit location queries, prioritize specific location
             if (($intent['intent_type'] ?? null) === 'location' && ($intent['location_mentioned'] ?? null)) {
-                error_log("Location-specific query detected: " . $intent['location_mentioned']);
                 return $this->getPlacesByLocation($intent['location_mentioned']);
             }
             
             // For service queries that explicitly mention a location
             if (($intent['intent_type'] ?? null) === 'service' && ($intent['location_mentioned'] ?? null)) {
-                error_log("Service query with location context: " . $intent['location_mentioned']);
                 return $this->getPlacesByLocation($intent['location_mentioned']);
             }
             
             // For urgent situations that mention a location, get nearest offices
-            if (($intent['urgency_level'] ?? null) === 'high' && ($intent['location_mentioned'] ?? null)) {
-                error_log("Urgent query with location: " . $intent['location_mentioned']);
+            if (($intent['urgency'] ?? null) === 'high' && ($intent['location_mentioned'] ?? null)) {
                 return $this->getPlacesByLocation($intent['location_mentioned']);
             }
             
-            // NEW: Skip places entirely if no location mentioned and not a location query
-            if (empty($intent['location_mentioned'] ?? null) && ($intent['intent_type'] ?? null) !== 'location') {
-                error_log("No location mentioned in non-location query - skipping places search");
-                return [];
+            // ENHANCED: Check if query contains location words using dynamic PlaceList data
+            $locationData = $this->getLocationKeywords();
+            $locationKeywords = $locationData['locationKeywords'];
+            $placeNames = $locationData['placeNames'];
+            $queryLower = strtolower($query);
+            
+            foreach ($locationKeywords as $keyword) {
+                if (strpos($queryLower, $keyword) !== false) {
+                    
+                    // If it's a specific place name, search by that location
+                    foreach ($placeNames as $placeName) {
+                        if (strpos($queryLower, $placeName) !== false) {
+                            return $this->getPlacesByLocation($placeName);
+                        }
+                    }
+                    
+                    // General location query - show main offices
+                    return $this->getNearestOffices();
+                }
             }
             
-            // Fallback: if somehow we get here, return empty array
-            error_log("Places search skipped - no relevant location context found");
+            // FALLBACK: For location intent type without specific location mentioned
+            if (($intent['intent_type'] ?? null) === 'location') {
+                return $this->getNearestOffices();
+            }
+            
+            // Skip places if no location context found
             return [];
             
         } catch (\Exception $e) {
-            error_log("Targeted places search error: " . $e->getMessage());
             return [];
         }
     }
@@ -2394,79 +2887,77 @@ Query: {$query}";
     private function getSpecialistsByService($intentOrServiceArea, $maxResults = 3): array
     {
         try {
-            error_log("=== USING KATALYSIS PRO PEOPLELIST CLASS ===");
             
             // Handle both intent object and legacy string input
             if (is_array($intentOrServiceArea)) {
                 $serviceArea = $intentOrServiceArea['service_area'] ?? 'unknown';
                 $specialismId = $intentOrServiceArea['specialism_id'] ?? null;
-                error_log("Service Area: '$serviceArea'");
-                error_log("Specialism ID from intent: " . ($specialismId ? $specialismId : 'null'));
             } else {
                 // Legacy string input
                 $serviceArea = $intentOrServiceArea;
                 $specialismId = null;
-                error_log("Service Area: '$serviceArea'");
-                error_log("Legacy string input - no specialism ID available");
             }
             
-            error_log("Max Results: $maxResults");
             
             // Use specialism_id from intent if available (much faster)
             if ($specialismId) {
-                error_log("Using identified specialism ID: $specialismId for fast filtering");
                 
                 // Direct specialism-based search using proper filterBySpecialisms method
                 $peopleList = new PeopleList();
                 $peopleList->filterByActive();
                 $peopleList->filterBySpecialisms([$specialismId]);
-                $peopleList->limitResults($maxResults);
+                $peopleList->limitResults($maxResults * 2); // Get more results for location sorting
                 
                 $results = $peopleList->getResults();
-                error_log("PeopleList with specialism ID returned " . count($results) . " specialists");
                 
                 if (!empty($results)) {
+                    // Apply location-based prioritization if location is mentioned in intent
+                    $locationMentioned = $intentOrServiceArea['location_mentioned'] ?? null;
+                    if ($locationMentioned && count($results) > 1) {
+                        $results = $this->prioritizeSpecialistsByLocation($results, $locationMentioned, $maxResults);
+                    } else {
+                        // Just limit to the requested number of results
+                        $results = array_slice($results, 0, $maxResults);
+                    }
                     return $this->formatPeopleListResults($results);
                 } else {
-                    error_log("No specialists found for specialism ID $specialismId");
                     
                     // SMART FALLBACK: Try parent topic if child topic has no specialists
                     $parentSpecialismId = $this->getParentSpecialismId($specialismId);
                     if ($parentSpecialismId && $parentSpecialismId !== $specialismId) {
-                        error_log("Trying parent specialism ID: $parentSpecialismId");
                         
                         $parentPeopleList = new PeopleList();
                         $parentPeopleList->filterByActive();
                         $parentPeopleList->filterBySpecialisms([$parentSpecialismId]);
-                        $parentPeopleList->limitResults($maxResults);
+                        $parentPeopleList->limitResults($maxResults * 2); // Get more for location sorting
                         
                         $parentResults = $parentPeopleList->getResults();
-                        error_log("Parent specialism ID $parentSpecialismId returned " . count($parentResults) . " specialists");
                         
                         if (!empty($parentResults)) {
-                            error_log("SUCCESS: Found specialists using parent specialism");
+                            // Apply location-based prioritization for parent results too
+                            $locationMentioned = $intentOrServiceArea['location_mentioned'] ?? null;
+                            if ($locationMentioned && count($parentResults) > 1) {
+                                $parentResults = $this->prioritizeSpecialistsByLocation($parentResults, $locationMentioned, $maxResults);
+                            } else {
+                                $parentResults = array_slice($parentResults, 0, $maxResults);
+                            }
                             return $this->formatPeopleListResults($parentResults);
                         }
                     }
                     
-                    // DEBUG: Check if there are ANY specialism associations
+
                     $db = Database::get();
                     $specialismAssociations = $db->GetOne("SELECT COUNT(*) FROM KatalysisPeopleSpecialism WHERE specialismID = ?", [$specialismId]);
-                    error_log("Total people linked to specialism $specialismId: $specialismAssociations");
                     
                     // FAST FAIL: No specialists in child or parent topic
-                    error_log("Fast fail - no specialists found for specialism $specialismId or its parent");
                     return [];
                 }
             }
             
             // FAST FAIL: No specialism ID means no results  
-            error_log("No specialism ID available - returning empty");
             return [];
             
         } catch (\Exception $e) {
-            error_log("PeopleList specialist search error: " . $e->getMessage());
-            error_log("Error trace: " . $e->getTraceAsString());
             return [['error' => 'Specialist search failed: ' . $e->getMessage()]];
         }
     }
@@ -2477,61 +2968,75 @@ Query: {$query}";
     private function getSpecialistsByName($personName, $maxResults = 3): array
     {
         try {
-            error_log("Searching for person by name: " . $personName);
             
-            $db = Database::get();
+            // Use PeopleList to get all active people, then filter by name in PHP
+            $peopleList = new PeopleList();
+            $peopleList->filterByActive();
+            $peopleList->limitResults(20); // Get more to filter from
             
-            // Clean and prepare the search name
-            $cleanName = trim($personName);
+            $allPeople = $peopleList->getResults();
+            
+            // Filter people by name in PHP with flexible matching
+            $cleanName = trim(strtolower($personName));
             $nameWords = explode(' ', $cleanName);
+            $matchingPeople = [];
             
-            // Build flexible name search query
-            $nameConditions = [];
-            $params = [];
-            
-            // Search by full name (exact match)
-            $nameConditions[] = "LOWER(p.name) LIKE ?";
-            $params[] = '%' . strtolower($cleanName) . '%';
-            
-            // Search by individual words in name
-            foreach ($nameWords as $word) {
-                if (strlen(trim($word)) > 2) { // Only search meaningful words
-                    $nameConditions[] = "LOWER(p.name) LIKE ?";
-                    $params[] = '%' . strtolower(trim($word)) . '%';
+            foreach ($allPeople as $person) {
+                $personNameLower = strtolower($person->name);
+                $jobTitleNameLower = strtolower($person->jobTitle . ' ' . $person->name);
+                
+                // Check various matching conditions
+                $exactMatch = $personNameLower === $cleanName;
+                $containsFullName = strpos($personNameLower, $cleanName) !== false;
+                $containsJobTitle = strpos($jobTitleNameLower, $cleanName) !== false;
+                
+                // Check if all name words are present
+                $allWordsMatch = true;
+                foreach ($nameWords as $word) {
+                    $word = trim($word);
+                    if (strlen($word) > 2 && strpos($personNameLower, $word) === false) {
+                        $allWordsMatch = false;
+                        break;
+                    }
+                }
+                
+                if ($exactMatch || $containsFullName || $containsJobTitle || $allWordsMatch) {
+                    // Add priority score for sorting
+                    $priority = 0;
+                    if ($exactMatch) $priority = 1;
+                    elseif ($containsFullName) $priority = 2;
+                    elseif ($allWordsMatch) $priority = 3;
+                    else $priority = 4;
+                    
+                    $matchingPeople[] = [
+                        'person' => $person,
+                        'priority' => $priority,
+                        'featured' => $person->featured ?? 0
+                    ];
                 }
             }
             
-            // Also check if it might be searching by job title + name combination
-            $nameConditions[] = "LOWER(CONCAT(p.jobTitle, ' ', p.name)) LIKE ?";
-            $params[] = '%' . strtolower($cleanName) . '%';
-            
-            $sql = "SELECT p.sID, p.name, p.jobTitle, p.email, p.phone, p.featured, p.shortBiography
-                    FROM KatalysisPeople p
-                    WHERE p.active = 1 
-                    AND (" . implode(' OR ', $nameConditions) . ")
-                    ORDER BY 
-                        CASE WHEN LOWER(p.name) = ? THEN 1 ELSE 2 END,  -- Exact name match first
-                        p.featured DESC,
-                        CHAR_LENGTH(p.name) ASC,  -- Shorter names first (likely more specific)
-                        p.name ASC
-                    LIMIT " . (int)$maxResults;
-            
-            // Add exact match parameter for ordering
-            $params[] = strtolower($cleanName);
-            
-            $specialists = $db->GetAll($sql, $params);
-            
-            if (empty($specialists)) {
-                error_log("No specialists found for name: " . $personName);
+            if (empty($matchingPeople)) {
                 return [];
             }
             
-            error_log("Found " . count($specialists) . " specialists matching name: " . $personName);
-            return $this->formatSpecialistResults($specialists);
+            // Sort by priority, then featured, then name length
+            usort($matchingPeople, function($a, $b) {
+                if ($a['priority'] !== $b['priority']) {
+                    return $a['priority'] - $b['priority'];
+                }
+                if ($a['featured'] !== $b['featured']) {
+                    return $b['featured'] - $a['featured'];
+                }
+                return strlen($a['person']->name) - strlen($b['person']->name);
+            });
+            
+            // Extract just the Person objects and limit results
+            $specialists = array_slice(array_column($matchingPeople, 'person'), 0, $maxResults);
+            
+            return $this->formatPeopleListResults($specialists);
             
         } catch (\Exception $e) {
-            error_log("Name-based specialist search error: " . $e->getMessage());
-            error_log("Error trace: " . $e->getTraceAsString());
             return [['error' => 'Person search failed: ' . $e->getMessage()]];
         }
     }
@@ -2539,33 +3044,52 @@ Query: {$query}";
     /**
      * Get specialists by location preference
      */
-    private function getSpecialistsByLocation($location, $maxResults = 1): array
+    private function getSpecialistsByLocation($location, $maxResults = 3): array
     {
         try {
-            // Get specialists associated with offices in or near the specified location
-            $db = Database::get();
             
-            $sql = "SELECT DISTINCT p.sID, p.name, p.jobTitle, p.email, p.phone, p.featured
-                    FROM KatalysisPeople p
-                    INNER JOIN KatalysisPeoplePlaces pp ON p.sID = pp.personID
-                    INNER JOIN KatalysisPlaces pl ON pp.placeID = pl.pID
-                    WHERE p.active = 1 AND pl.active = 1
-                    AND (LOWER(pl.name) LIKE ? OR LOWER(pl.town) LIKE ? OR LOWER(pl.county) LIKE ?)
-                    ORDER BY p.featured DESC, p.jobTitle LIKE '%director%' DESC
-                    LIMIT " . (int)$maxResults;
+            // First, find places that match the location
+            $placeList = new PlaceList();
+            $placeList->filterByActive();
+            $placeList->limitResults(10); // Get more to filter from
             
-            $locationPattern = '%' . strtolower($location) . '%';
-            $specialists = $db->GetAll($sql, [$locationPattern, $locationPattern, $locationPattern]);
+            $allPlaces = $placeList->getResults();
             
-            if (empty($specialists)) {
-                // Fallback to senior specialists if no location match
+            // Filter places by location in PHP (same logic as getPlacesByLocation)
+            $matchingPlaces = [];
+            $locationLower = strtolower($location);
+            
+            foreach ($allPlaces as $place) {
+                $nameMatch = stripos($place->name, $location) !== false;
+                $townMatch = stripos($place->town, $location) !== false;
+                $countyMatch = stripos($place->county, $location) !== false;
+                
+                if ($nameMatch || $townMatch || $countyMatch) {
+                    $matchingPlaces[] = $place->sID;
+                }
+            }
+            
+            
+            if (empty($matchingPlaces)) {
                 return $this->getSeniorSpecialists($maxResults);
             }
             
-            return $this->formatSpecialistResults($specialists);
+            // Now get people from those places using PeopleList
+            $peopleList = new PeopleList();
+            $peopleList->filterByActive();
+            $peopleList->filterByPlaces($matchingPlaces);
+            $peopleList->limitResults($maxResults);
+            
+            $specialists = $peopleList->getResults();
+            
+            if (empty($specialists)) {
+                return $this->getSeniorSpecialists($maxResults);
+            }
+            
+            // Use formatPeopleListResults for rich data including images and profile links
+            return $this->formatPeopleListResults($specialists);
             
         } catch (\Exception $e) {
-            error_log("Location-specific specialist search error: " . $e->getMessage());
             return $this->getSeniorSpecialists($maxResults);
         }
     }
@@ -2576,79 +3100,174 @@ Query: {$query}";
     private function getSeniorSpecialists($maxResults = 1): array
     {
         try {
-            $db = Database::get();
+            // Use PeopleList to get all active people, then sort by seniority in PHP
+            $peopleList = new PeopleList();
+            $peopleList->filterByActive();
+            $peopleList->limitResults(20); // Get more to sort from
             
-            $sql = "SELECT sID, name, jobTitle, email, phone, featured
-                    FROM KatalysisPeople 
-                    WHERE active = 1
-                    ORDER BY 
-                        featured DESC,
-                        CASE 
-                            WHEN jobTitle LIKE '%director%' THEN 3
-                            WHEN jobTitle LIKE '%head%' THEN 2  
-                            WHEN jobTitle LIKE '%senior%' THEN 1
-                            ELSE 0
-                        END DESC
-                    LIMIT ?";
+            $allPeople = $peopleList->getResults();
             
-            $specialists = $db->GetAll($sql, [$maxResults]);
+            // Sort people by seniority in PHP
+            $seniorityScores = [];
+            foreach ($allPeople as $person) {
+                $jobTitleLower = strtolower($person->jobTitle);
+                $score = 0;
+                
+                // Score based on job title seniority
+                if (strpos($jobTitleLower, 'director') !== false) $score = 3;
+                elseif (strpos($jobTitleLower, 'head') !== false) $score = 2;
+                elseif (strpos($jobTitleLower, 'senior') !== false) $score = 1;
+                
+                $seniorityScores[] = [
+                    'person' => $person,
+                    'score' => $score,
+                    'featured' => $person->featured ?? 0
+                ];
+            }
             
-            return $this->formatSpecialistResults($specialists);
+            // Sort by featured status first, then seniority score
+            usort($seniorityScores, function($a, $b) {
+                if ($a['featured'] !== $b['featured']) {
+                    return $b['featured'] - $a['featured']; // Featured first
+                }
+                return $b['score'] - $a['score']; // Higher seniority score first
+            });
+            
+            // Extract just the Person objects and limit results
+            $specialists = array_slice(array_column($seniorityScores, 'person'), 0, $maxResults);
+            
+            return $this->formatPeopleListResults($specialists);
             
         } catch (\Exception $e) {
-            error_log("Senior specialist search error: " . $e->getMessage());
             return [['error' => 'Senior specialist search failed: ' . $e->getMessage()]];
         }
     }
     
     /**
-     * Format specialist results consistently
+     * Prioritize specialists by location match when multiple specialists exist for the same specialism
      */
-    private function formatSpecialistResults($specialists): array
+    private function prioritizeSpecialistsByLocation($specialists, $locationMentioned, $maxResults)
     {
-        $results = [];
-        foreach ($specialists as $specialist) {
-            $officeInfo = $this->getSpecialistOfficeInfo($specialist['sID']);
+        if (empty($specialists) || empty($locationMentioned)) {
+            return array_slice($specialists, 0, $maxResults);
+        }
+        
+        $locationScored = [];
+        $locationLower = strtolower($locationMentioned);
+        
+        foreach ($specialists as $person) {
+            $score = 0;
             
-            $results[] = [
-                'id' => $specialist['sID'],
-                'name' => $specialist['name'],
-                'title' => $specialist['jobTitle'] ?: 'Specialist',
-                'expertise' => $this->mapJobTitleToExpertise($specialist['jobTitle']),
-                'contact' => $specialist['email'] ?: $specialist['phone'] ?: 'Contact Available',
-                'email' => $specialist['email'],
-                'phone' => $specialist['phone'],
-                'featured' => (bool)$specialist['featured'],
-                'office' => $officeInfo,
-                'relevance_score' => 8, // High score for targeted results
-                'optimized_match' => true
+            // Check if specialist's office locations match the mentioned location
+            $offices = $person->officelocations ?? [];
+            if (!empty($offices)) {
+                foreach ($offices as $office) {
+                    $officeName = strtolower($office->oName ?? '');
+                    if (strpos($officeName, $locationLower) !== false || 
+                        strpos($locationLower, $officeName) !== false) {
+                        $score += 10; // High priority for office location match
+                    }
+                }
+            }
+            
+            // Also check if person's name or bio contains location references
+            $personName = strtolower($person->pName ?? '');
+            $personBio = strtolower($person->biographicalInformation ?? '');
+            if (strpos($personBio, $locationLower) !== false) {
+                $score += 5; // Medium priority for bio mention
+            }
+            
+            $locationScored[] = [
+                'person' => $person,
+                'location_score' => $score
             ];
         }
         
-        return $results;
+        // Sort by location score (descending), then preserve original order
+        usort($locationScored, function($a, $b) {
+            return $b['location_score'] - $a['location_score'];
+        });
+        
+        // Extract the sorted persons and limit results
+        $sortedSpecialists = array_column($locationScored, 'person');
+        return array_slice($sortedSpecialists, 0, $maxResults);
     }
     
-
-
-
+    /**
+     * Format specialist results consistently
+     */
     /**
      * Format PeopleList results for API response
      */
     private function formatPeopleListResults($results): array
     {
         $formattedResults = [];
+        $seenPersonIds = []; // Track person IDs to prevent duplicates
+        
         foreach ($results as $person) {
-            error_log("Processing person: " . $person->name . " (ID: " . $person->sID . ", Job: " . $person->jobTitle . ")");
+            // Skip if we've already processed this person
+            if (in_array($person->sID, $seenPersonIds)) {
+                continue;
+            }
+            
+            // Mark this person as seen
+            $seenPersonIds[] = $person->sID;
+            
             
             // Get specialisms/topics for this person
             $specialisms = $person->getSpecialisms($person->sID);
-            error_log("Person specialisms: " . json_encode($specialisms));
             
             $expertise = !empty($specialisms) ? 
                 implode(', ', array_column($specialisms, 'treeNodeName')) : 
                 $this->mapJobTitleToExpertise($person->jobTitle);
             
-            error_log("Final mapped expertise: " . $expertise);
+            
+            // Get image data
+            $imageUrl = null;
+            $imageAlt = $person->name;
+            if ($person->image > 0) {
+                try {
+                    $thumbnail = \Concrete\Core\File\File::getByID($person->image);
+                    if (is_object($thumbnail)) {
+                        $imageType = \Concrete\Core\File\Image\Thumbnail\Type\Type::getByHandle('small_square');
+                        if ($imageType) {
+                            $imageUrl = $thumbnail->getThumbnailURL($imageType->getBaseVersion());
+                        } else {
+                            // Fallback to original image if thumbnail type doesn't exist
+                            $imageUrl = $thumbnail->getURL();
+                        }
+                    }
+                } catch (\Exception $e) {
+                }
+            }
+            
+            // Get profile page link
+            $profileUrl = null;
+            if ($person->page > 0) {
+                try {
+                    $profilePage = \Concrete\Core\Page\Page::getByID($person->page);
+                    if (is_object($profilePage) && !$profilePage->isError()) {
+                        $profileUrl = $profilePage->getCollectionPath();
+                    }
+                } catch (\Exception $e) {
+                }
+            }
+            
+            // Get office/location data
+            $personObj = new \Concrete\Package\KatalysisPro\Src\KatalysisPro\People\Person;
+            $places = $personObj->getPlaces($person->sID);
+            $officeInfo = null;
+            if (is_array($places) && !empty($places)) {
+                $officeNames = array_column($places, 'name');
+                $officeTowns = array_column($places, 'town');
+                $officeCounties = array_column($places, 'county');
+                
+                $officeInfo = [
+                    'name' => implode(', ', array_filter($officeNames)),
+                    'town' => implode(', ', array_filter($officeTowns)),
+                    'county' => implode(', ', array_filter($officeCounties))
+                ];
+            }
             
             $formattedResults[] = [
                 'id' => $person->sID,
@@ -2658,14 +3277,22 @@ Query: {$query}";
                 'contact' => $person->email ?: $person->phone ?: 'Contact Available',
                 'email' => $person->email,
                 'phone' => $person->phone,
+                'mobile' => $person->mobile,
                 'featured' => (bool)$person->featured,
                 'relevance_score' => 9, // High score for specialism-matched results
                 'sort_order' => $person->sortOrder,
-                'specialism_match' => true
+                'specialism_match' => true,
+                // Rich data for frontend rendering
+                'image_url' => $imageUrl,
+                'image_alt' => $imageAlt,
+                'profile_url' => $profileUrl,
+                'office' => $officeInfo,
+                'qualification' => $person->qualification ?? null,
+                'short_biography' => $person->shortBiography ?? null,
+                'biography' => $person->biography ?? null
             ];
         }
         
-        error_log("SPECIALIST SEARCH COMPLETE: Returning " . count($formattedResults) . " PeopleList specialists");
         return $formattedResults;
     }
     
@@ -2692,9 +3319,9 @@ Query: {$query}";
                 $reviewSpecialismCount = $db->GetOne("SELECT COUNT(*) FROM KatalysisReviewSpecialism WHERE specialismID = ?", [$specialismId]);
                 $totalActiveReviews = $db->GetOne("SELECT COUNT(*) FROM KatalysisReviews WHERE active = 1");
                 
-                // If no reviews for this specialism but reviews exist, return general high-rating reviews
+                // If no reviews for this specialism but reviews exist, return featured reviews
                 if ($totalActiveReviews > 0 && $reviewSpecialismCount == 0) {
-                    return $this->getGeneralHighRatingReviews();
+                    return $this->getFeaturedReviews();
                 }
                 
                 return [['error' => 'No reviews found for this specialism']];
@@ -2719,89 +3346,57 @@ Query: {$query}";
             return $formattedResults;
             
         } catch (\Exception $e) {
-            error_log("Fast review search error: " . $e->getMessage());
             // Return error message instead of fallback
             return [['error' => 'Review search failed: ' . $e->getMessage()]];
         }
     }
 
+
+    
     /**
-     * Get outcome-focused reviews for urgent situations
+     * Get general high-rating reviews using ReviewList
      */
-    private function getOutcomeFocusedReviews(): array
+    private function getFeaturedReviews(): array
     {
         try {
-            $db = Database::get();
+            // Use ReviewList for proper ORM approach
+            $reviewList = new ReviewList();
+            $reviewList->filterByActive();
             
-            // Look for reviews mentioning successful outcomes
-            $sql = "SELECT sID, author, organization, rating, extract, review, source, featured 
-                    FROM KatalysisReviews 
-                    WHERE active = 1 
-                    AND (LOWER(review) LIKE '%successful%' OR LOWER(review) LIKE '%won%' OR 
-                         LOWER(review) LIKE '%achieved%' OR LOWER(review) LIKE '%resolved%' OR
-                         LOWER(extract) LIKE '%successful%' OR LOWER(extract) LIKE '%won%')
-                    ORDER BY rating DESC, featured DESC 
-                    LIMIT 3";
+            // Filter for high ratings (4+) by modifying the query directly
+            $reviewList->getQueryObject()->andWhere('rating >= 4');
             
-            $reviews = $db->GetAll($sql);
+            // Order by featured first, then rating (overriding default sortOrder)
+            $reviewList->getQueryObject()->orderBy('featured', 'DESC')->addOrderBy('rating', 'DESC');
             
-            if (empty($reviews)) {
-                return $this->getGeneralHighRatingReviews();
+            $reviewList->limitResults(3);
+            $results = $reviewList->getResults();
+            
+            if (empty($results)) {
+                return [['error' => 'No high-rating reviews found']];
             }
             
-            return $this->formatReviewResults($reviews);
+            // Format for API response using Review objects
+            $formattedResults = [];
+            foreach ($results as $reviewObj) {
+                $formattedResults[] = [
+                    'id' => $reviewObj->sID,
+                    'client_name' => $reviewObj->author ?: 'Anonymous',
+                    'organization' => $reviewObj->organization ?: '',
+                    'rating' => (int)($reviewObj->rating ?: 5),
+                    'review' => $reviewObj->extract ?: $reviewObj->review ?: 'Excellent service',
+                    'source' => $reviewObj->source ?: 'Client Review',
+                    'featured' => (bool)$reviewObj->featured,
+                    'relevance_score' => 8, // High score for featured/high-rating reviews
+                    'featured_match' => true
+                ];
+            }
+            
+            return $formattedResults;
             
         } catch (\Exception $e) {
-            error_log("Outcome-focused review search error: " . $e->getMessage());
-            return $this->getGeneralHighRatingReviews();
-        }
-    }
-    
-    /**
-     * Get general high-rating reviews
-     */
-    private function getGeneralHighRatingReviews(): array
-    {
-        try {
-            $db = Database::get();
-            
-            $sql = "SELECT sID, author, organization, rating, extract, review, source, featured 
-                    FROM KatalysisReviews 
-                    WHERE active = 1 AND rating >= 4
-                    ORDER BY rating DESC, featured DESC 
-                    LIMIT 3";
-            
-            $reviews = $db->GetAll($sql);
-            
-            return $this->formatReviewResults($reviews);
-            
-        } catch (\Exception $e) {
-            error_log("General review search error: " . $e->getMessage());
             return [['error' => 'Review search failed: ' . $e->getMessage()]];
         }
-    }
-    
-    /**
-     * Format review results consistently
-     */
-    private function formatReviewResults($reviews): array
-    {
-        $results = [];
-        foreach ($reviews as $review) {
-            $results[] = [
-                'id' => $review['sID'],
-                'client_name' => $review['author'],
-                'organization' => $review['organization'],
-                'rating' => (int)($review['rating'] ?: 5),
-                'review' => $review['extract'] ?: $review['review'] ?: 'Excellent service',
-                'source' => $review['source'] ?: 'Client Review',
-                'featured' => (bool)$review['featured'],
-                'relevance_score' => 8, // High score for targeted results
-                'optimized_match' => true
-            ];
-        }
-        
-        return $results;
     }
     
     /**
@@ -2810,43 +3405,54 @@ Query: {$query}";
     private function getPlacesByLocation($location): array
     {
         try {
-            $db = Database::get();
+            // Use PlaceList to get all active places, then filter in PHP
+            $placeList = new PlaceList();
+            $placeList->filterByActive();
+            $placeList->limitResults(10); // Get more to filter from
             
-            $sql = "SELECT sID, name, address1, address2, town, county, postcode, phone 
-                    FROM KatalysisPlaces 
-                    WHERE active = 1 
-                    AND (LOWER(name) LIKE ? OR LOWER(town) LIKE ? OR LOWER(county) LIKE ?)
-                    ORDER BY name 
-                    LIMIT 3";
+            $allPlaces = $placeList->getResults();
             
-            $locationPattern = '%' . strtolower($location) . '%';
-            $places = $db->GetAll($sql, [$locationPattern, $locationPattern, $locationPattern]);
+            // Filter places by location in PHP
+            $matchingPlaces = [];
+            $locationLower = strtolower($location);
             
-            if (empty($places)) {
+            foreach ($allPlaces as $place) {
+                $nameMatch = stripos($place->name, $location) !== false;
+                $townMatch = stripos($place->town, $location) !== false;
+                $countyMatch = stripos($place->county, $location) !== false;
+                
+                if ($nameMatch || $townMatch || $countyMatch) {
+                    $matchingPlaces[] = $place;
+                    if (count($matchingPlaces) >= 3) break; // Limit to 3
+                }
+            }
+            
+            
+            if (empty($matchingPlaces)) {
                 return $this->getNearestOffices();
             }
             
-            return $this->formatPlaceResults($places, true);
+            // Convert Place objects to array format
+            $placesArray = [];
+            foreach ($matchingPlaces as $place) {
+                $placesArray[] = [
+                    'sID' => $place->sID,
+                    'name' => $place->name,
+                    'address1' => $place->address1,
+                    'address2' => $place->address2,
+                    'town' => $place->town,
+                    'county' => $place->county,
+                    'postcode' => $place->postcode,
+                    'phone' => $place->phone
+                ];
+            }
+            
+            $formattedPlaces = $this->formatPlaceResults($placesArray, true);
+            
+            return $formattedPlaces;
             
         } catch (\Exception $e) {
-            error_log("Location-specific places search error: " . $e->getMessage());
             return $this->getNearestOffices();
-        }
-    }
-    
-    /**
-     * Get offices capable of handling specific services
-     */
-    private function getServiceCapableOffices($serviceArea): array
-    {
-        try {
-            // For now, return main offices as all can handle most services
-            // This could be enhanced with service-office mapping
-            return $this->getNearestOffices();
-            
-        } catch (\Exception $e) {
-            error_log("Service-capable offices search error: " . $e->getMessage());
-            return [['error' => 'Office search failed: ' . $e->getMessage()]];
         }
     }
     
@@ -2856,26 +3462,52 @@ Query: {$query}";
     private function getNearestOffices(): array
     {
         try {
-            $db = Database::get();
+            // Use PlaceList to get active places, then sort by priority in PHP
+            $placeList = new PlaceList();
+            $placeList->filterByActive();
+            $placeList->limitResults(10); // Get more to sort from
             
-            $sql = "SELECT sID, name, address1, address2, town, county, postcode, phone 
-                    FROM KatalysisPlaces 
-                    WHERE active = 1
-                    ORDER BY 
-                        CASE 
-                            WHEN LOWER(name) LIKE '%main%' THEN 1
-                            WHEN LOWER(name) LIKE '%head%' THEN 2
-                            ELSE 3
-                        END,
-                        name 
-                    LIMIT 3";
+            $allPlaces = $placeList->getResults();
             
-            $places = $db->GetAll($sql);
+            // Sort places to prioritize main/head offices
+            $sortedPlaces = [];
+            $mainOffices = [];
+            $headOffices = [];
+            $otherOffices = [];
             
-            return $this->formatPlaceResults($places, false);
+            foreach ($allPlaces as $place) {
+                $nameLower = strtolower($place->name);
+                if (strpos($nameLower, 'main') !== false) {
+                    $mainOffices[] = $place;
+                } elseif (strpos($nameLower, 'head') !== false) {
+                    $headOffices[] = $place;
+                } else {
+                    $otherOffices[] = $place;
+                }
+            }
+            
+            // Combine in priority order and limit to 3
+            $sortedPlaces = array_merge($mainOffices, $headOffices, $otherOffices);
+            $topPlaces = array_slice($sortedPlaces, 0, 3);
+            
+            // Convert Place objects to array format
+            $placesArray = [];
+            foreach ($topPlaces as $place) {
+                $placesArray[] = [
+                    'sID' => $place->sID,
+                    'name' => $place->name,
+                    'address1' => $place->address1,
+                    'address2' => $place->address2,
+                    'town' => $place->town,
+                    'county' => $place->county,
+                    'postcode' => $place->postcode,
+                    'phone' => $place->phone
+                ];
+            }
+            
+            return $this->formatPlaceResults($placesArray, false);
             
         } catch (\Exception $e) {
-            error_log("Nearest offices search error: " . $e->getMessage());
             return [['error' => 'Nearest offices search failed: ' . $e->getMessage()]];
         }
     }
@@ -2887,6 +3519,7 @@ Query: {$query}";
     {
         $results = [];
         foreach ($places as $place) {
+            // Build complete address
             $address = trim(($place['address1'] ?? '') . ' ' . ($place['address2'] ?? ''));
             if (!empty($place['town'])) {
                 $address .= ($address ? ', ' : '') . $place['town'];
@@ -2898,182 +3531,68 @@ Query: {$query}";
                 $address .= ($address ? ' ' : '') . $place['postcode'];
             }
             
+            // Get additional place data using the proper Place class
+            $additionalData = [];
+            if (!empty($place['sID'])) {
+                try {
+                    $fullPlace = Place::getByID($place['sID']);
+                    
+                    if ($fullPlace) {
+                        $additionalData = [
+                            'email' => $fullPlace->email ?? null,
+                            'fax' => null, // Not in database schema
+                            'opening_hours' => $fullPlace->openingHours ?? null,
+                            'parking_info' => null, // Not in database schema  
+                            'accessibility' => null, // Not in database schema
+                            'page_url' => null,
+                            'latitude' => $fullPlace->latitude ?? null,
+                            'longitude' => $fullPlace->longitude ?? null
+                        ];
+                        
+                        // Get page URL if place has a linked page
+                        if (!empty($fullPlace->page)) {
+                            try {
+                                $placePage = \Concrete\Core\Page\Page::getByID($fullPlace->page);
+                                if (is_object($placePage) && !$placePage->isError()) {
+                                    $additionalData['page_url'] = $placePage->getCollectionPath();
+                                }
+                            } catch (\Exception $e) {
+                            }
+                        }
+                    }
+                } catch (\Exception $e) {
+                }
+            }
+            
             $results[] = [
                 'id' => $place['sID'],
                 'name' => $place['name'],
                 'address' => $address,
                 'phone' => $place['phone'] ?? '',
-                'services' => [],
+                'email' => $additionalData['email'] ?? null,
+                'fax' => $additionalData['fax'] ?? null,
+                'opening_hours' => $additionalData['opening_hours'] ?? null,
+                'parking_info' => $additionalData['parking_info'] ?? null,
+                'accessibility' => $additionalData['accessibility'] ?? null,
+                'page_url' => $additionalData['page_url'] ?? null,
+                'latitude' => $additionalData['latitude'] ?? null,
+                'longitude' => $additionalData['longitude'] ?? null,
+                'services' => [], // Could be enhanced with place-service mapping
                 'featured' => false,
                 'relevance_score' => $isLocationSpecific ? 9 : 7,
-                'optimized_match' => true
+                'optimized_match' => true,
+                // Individual address components for flexible display
+                'address_components' => [
+                    'line1' => $place['address1'] ?? '',
+                    'line2' => $place['address2'] ?? '',
+                    'town' => $place['town'] ?? '',
+                    'county' => $place['county'] ?? '',
+                    'postcode' => $place['postcode'] ?? ''
+                ]
             ];
         }
         
         return $results;
-    }
-    
-    /**
-     * Get reviews by content keywords when no specialism links exist
-     */
-    private function getReviewsByContent($serviceArea): array
-    {
-        try {
-            error_log("=== CONTENT-BASED REVIEW SEARCH ===");
-            error_log("Searching reviews by content for: $serviceArea");
-            
-            $db = Database::get();
-            
-            // Get service-specific keywords
-            $keywords = $this->getServiceKeywords($serviceArea);
-            error_log("Using keywords: " . implode(', ', $keywords));
-            
-            if (empty($keywords)) {
-                error_log("No keywords found for service area: $serviceArea");
-                return [['error' => 'No keywords available for content search']];
-            }
-            
-            // Build SQL query to search review content
-            $keywordConditions = [];
-            $params = [];
-            
-            foreach ($keywords as $keyword) {
-                $keywordConditions[] = "(LOWER(extract) LIKE ? OR LOWER(review) LIKE ?)";
-                $params[] = '%' . strtolower($keyword) . '%';
-                $params[] = '%' . strtolower($keyword) . '%';
-            }
-            
-            $sql = "SELECT sID, author, organization, rating, extract, review, source, featured 
-                   FROM KatalysisReviews 
-                   WHERE active = 1 AND (" . implode(' OR ', $keywordConditions) . ")
-                   ORDER BY rating DESC, featured DESC 
-                   LIMIT 3";
-            
-            $reviews = $db->GetAll($sql, $params);
-            error_log("Content search found " . count($reviews) . " reviews");
-            
-            if (empty($reviews)) {
-                error_log("No content-based reviews found for: $serviceArea");
-                return [['error' => 'No reviews found containing relevant keywords']];
-            }
-            
-            // Format results
-            $formattedResults = [];
-            foreach ($reviews as $row) {
-                $formattedResults[] = [
-                    'id' => $row['sID'],
-                    'client_name' => $row['author'] ?: 'Anonymous',
-                    'organization' => $row['organization'] ?: '',
-                    'rating' => (int)($row['rating'] ?: 5),
-                    'review' => $row['extract'] ?: $row['review'] ?: 'Excellent service',
-                    'source' => $row['source'] ?: 'Client Review',
-                    'featured' => (bool)$row['featured'],
-                    'relevance_score' => 7, // Good score for content match
-                    'content_match' => true
-                ];
-            }
-            
-            error_log("CONTENT-BASED SEARCH COMPLETE: Returning " . count($formattedResults) . " reviews");
-            return $formattedResults;
-            
-        } catch (\Exception $e) {
-            error_log("Content-based review search error: " . $e->getMessage());
-            return [['error' => 'Content search failed: ' . $e->getMessage()]];
-        }
-    }
-    
-    /**
-     * Get service keywords for filtering
-     */
-    private function getServiceKeywords($serviceArea): array
-    {
-        $serviceMap = [
-            'conveyancing' => ['conveyancing', 'property', 'purchase', 'sale'],
-            'family' => ['family', 'divorce', 'custody', 'matrimonial'],
-            'personal injury' => ['personal injury', 'accident', 'compensation', 'medical negligence', 'injury'],
-            'employment' => ['employment', 'workplace', 'tribunal', 'dismissal'],
-            'wills' => ['wills', 'probate', 'estate', 'inheritance'],
-            'probate' => ['wills', 'probate', 'estate', 'inheritance'],
-            'litigation' => ['litigation', 'dispute', 'court', 'legal action'],
-            'injury' => ['personal injury', 'accident', 'compensation', 'medical negligence', 'injury']
-        ];
-        
-        $serviceArea = strtolower($serviceArea ?: '');
-        
-        // Direct match first
-        foreach ($serviceMap as $area => $keywords) {
-            if ($serviceArea === $area || strpos($serviceArea, $area) !== false) {
-                error_log("Service keyword match found: '$serviceArea' matches '$area' - keywords: " . implode(', ', $keywords));
-                return $keywords;
-            }
-        }
-        
-        // Partial match for compound terms
-        foreach ($serviceMap as $area => $keywords) {
-            foreach ($keywords as $keyword) {
-                if (strpos($serviceArea, $keyword) !== false) {
-                    error_log("Partial service keyword match: '$serviceArea' contains '$keyword' - using keywords: " . implode(', ', $keywords));
-                    return $keywords;
-                }
-            }
-        }
-        
-        error_log("No service keyword match for: '$serviceArea' - using fallback");
-        // Return general keywords if no specific match
-        return [$serviceArea]; // Use the service area itself as keyword
-    }
-    
-    /**
-     * Get optimization strategy description for debug panel
-     */
-    private function getOptimizationStrategy($intent): array
-    {
-        $strategy = [
-            'type' => $intent['intent_type'],
-            'description' => '',
-            'specialist_strategy' => '',
-            'places_strategy' => '',
-            'reviews_strategy' => ''
-        ];
-        
-        switch ($intent['intent_type']) {
-            case 'service':
-                $strategy['description'] = 'Specialism-based optimization: Using AI-identified specialisms and CMS Topics';
-                $strategy['specialist_strategy'] = 'Specialism matching via database relationships: ' . ($intent['service_area'] ?? 'general');
-                $strategy['places_strategy'] = 'Main offices (all services available)';
-                $strategy['reviews_strategy'] = 'Specialism-linked testimonials via KatalysisReviewTopic';
-                break;
-                
-            case 'location':
-                $strategy['description'] = 'Location-based optimization: Geographic matching priority';
-                $strategy['specialist_strategy'] = 'Location-based filtering: ' . ($intent['location_mentioned'] ?? 'general');
-                $strategy['places_strategy'] = 'Geographic matching with exact location priority';
-                $strategy['reviews_strategy'] = 'General high-rating testimonials';
-                break;
-                
-            case 'person':
-                $strategy['description'] = 'Person-specific optimization: Name-based specialist search';
-                $strategy['specialist_strategy'] = 'Name matching with flexible search: ' . ($intent['person_name'] ?? 'unknown');
-                $strategy['places_strategy'] = 'Associated office locations for found specialist';
-                $strategy['reviews_strategy'] = 'Specialist-specific or practice area testimonials';
-                break;
-                
-            case 'situation':
-                $strategy['description'] = 'Situation-urgent optimization: Experience and accessibility focus';
-                $strategy['specialist_strategy'] = 'Senior/experienced practitioners for urgent matters';
-                $strategy['places_strategy'] = 'Nearest offices for consultation convenience';
-                $strategy['reviews_strategy'] = 'Outcome-focused testimonials';
-                break;
-                
-            default: // information
-                $strategy['description'] = 'Information-comprehensive optimization: Educational focus';
-                $strategy['specialist_strategy'] = 'Practice area expert for follow-up';
-                $strategy['places_strategy'] = 'All main offices (process location-independent)';
-                $strategy['reviews_strategy'] = 'Educational value testimonials';
-                break;
-        }
-        
-        return $strategy;
     }
     
     /**
@@ -3086,12 +3605,82 @@ Query: {$query}";
             'service_detected' => $intent['service_area'] ?? 'None',
             'location_detected' => $intent['location_mentioned'] ?? 'None',
             'person_detected' => $intent['person_name'] ?? 'None',
-            'urgency_assessment' => $intent['urgency_level'],
+            'urgency_assessment' => $intent['urgency'] ?? 'unknown',
             'complexity_rating' => $intent['complexity'],
             'suggested_contacts' => $intent['suggested_specialist_count'],
             'office_focus' => $intent['suggested_office_focus'],
             'review_type' => $intent['review_type_needed']
         ];
+    }
+    
+    /**
+     * Debug method: Search for Work Accident related pages in vector store
+     */
+    public function debugWorkAccidentPages()
+    {
+        try {
+            $pageIndexService = new \KatalysisProAi\PageIndexService();
+            
+            // Test different search terms
+            $searchTerms = [
+                'Work Accident',
+                'Work Accidents', 
+                'Workplace Accident',
+                'Accident at Work',
+                'Industrial Accident',
+                'Industrial Accidents'
+            ];
+            
+            $results = [];
+            
+            foreach ($searchTerms as $term) {
+                echo "=== Searching for: '$term' ===\n";
+                // Use larger topK for comprehensive testing
+                $documents = $pageIndexService->getRelevantDocuments($term, 100);
+                
+                $results[$term] = [];
+                foreach ($documents as $i => $doc) {
+                    if (is_object($doc)) {
+                        $title = $doc->sourceName ?? 'Unknown';
+                        $score = $doc->score ?? 0;
+                        $pageType = $doc->metadata['pagetype'] ?? 'unknown';
+                        $url = $doc->metadata['url'] ?? 'no-url';
+                        
+                        // Only show relevant results (score > 0.3)
+                        if ($score > 0.3) {
+                            $results[$term][] = [
+                                'rank' => $i + 1,
+                                'title' => $title,
+                                'score' => round($score, 4),
+                                'page_type' => $pageType,
+                                'url' => $url,
+                                'content_preview' => substr($doc->content ?? '', 0, 200)
+                            ];
+                            
+                            echo sprintf(
+                                "#%d: %s (Score: %.4f, Type: %s)\n    URL: %s\n    Preview: %s...\n\n",
+                                $i + 1,
+                                $title,
+                                $score,
+                                $pageType,
+                                $url,
+                                substr(strip_tags($doc->content ?? ''), 0, 150)
+                            );
+                        }
+                    }
+                }
+                
+                if (empty($results[$term])) {
+                    echo "No relevant results found (score > 0.3)\n\n";
+                }
+            }
+            
+            return $results;
+            
+        } catch (\Exception $e) {
+            echo "Error in debug: " . $e->getMessage() . "\n";
+            return [];
+        }
     }
 
     /**
@@ -3099,13 +3688,14 @@ Query: {$query}";
      */
     private function applyPageTypeBoost($originalScore, $pageType): float
     {
-        // Define page type boost multipliers
+        // Define page type boost multipliers - TEMPORARILY DISABLED (all set to 1.0)
         $boostMap = [
-            'legal_service' => 1.3,           // +30% for legal service pages
-            'legal_service_index' => 1.4,    // +40% for legal service index pages  
-            'blog_entry' => 1.15,            // +15% for blog posts
-            'case_study' => 1.2,             // +20% for case studies
-            'news' => 1.1,                   // +10% for news articles
+            'legal_service' => 1.0,           // Temporarily disabled - was 1.35
+            'legal_service_index' => 1.0,    // Temporarily disabled - was 1.4  
+            'calculator_entry' => 1.0,       // Temporarily disabled - was 1.35
+            'blog_entry' => 1.0,             // Temporarily disabled - was 1.15
+            'case_study' => 1.0,             // Temporarily disabled - was 1.2
+            'news' => 1.0,                   // Temporarily disabled - was 1.1
             'page' => 1.0,                   // No boost for general pages
             '' => 1.0                        // No boost for unknown types
         ];
@@ -3115,6 +3705,109 @@ Query: {$query}";
         
         // Cap the maximum score at 1.0 to maintain score integrity
         return min($boostedScore, 1.0);
+    }
+
+    private function applyQueryKeywordBoost($originalScore, $pageTitle, $query): float
+    {
+        // Extract key terms from the query (remove common words)
+        $commonWords = ['a', 'an', 'the', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'is', 'are', 'was', 'were', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could', 'should', 'can', 'may', 'might', 'must'];
+        $queryWords = preg_split('/\s+/', strtolower(trim($query)));
+        $significantWords = array_filter($queryWords, function($word) use ($commonWords) {
+            return !in_array($word, $commonWords) && strlen($word) > 2;
+        });
+        
+        $titleLower = strtolower($pageTitle);
+        $matchCount = 0;
+        $totalWords = count($significantWords);
+        
+        if ($totalWords === 0) {
+            return $originalScore; // No significant words to match
+        }
+        
+        // Count how many query words appear in the title
+        foreach ($significantWords as $word) {
+            if (strpos($titleLower, $word) !== false) {
+                $matchCount++;
+            }
+        }
+        
+        // Calculate boost based on percentage of query words found in title
+        $matchRatio = $matchCount / $totalWords;
+        
+        // Apply boost: 0% match = no boost, 100% match = +25% boost, graduated in between - TEMPORARILY DISABLED
+        // $boostMultiplier = 1.0 + ($matchRatio * 0.25); // Max 25% boost for perfect matches - TEMPORARILY DISABLED
+        
+        // $boostedScore = $originalScore * $boostMultiplier; - TEMPORARILY DISABLED
+        
+        // Cap the maximum score at 1.0 to maintain score integrity
+        return $originalScore; // TEMPORARILY DISABLED - return original score without boost
+    }
+
+    private function applyParentChildBoosts($candidateDocs): array
+    {
+        // Create URL to title mapping for quick lookup
+        $urlToTitle = [];
+        $titleToCandidate = [];
+        foreach ($candidateDocs as $index => $doc) {
+            $urlToTitle[$doc['url']] = $doc['title'];
+            $titleToCandidate[$doc['title']] = $index;
+        }
+        
+        // Define parent-child relationships based on URL patterns and common naming
+        $parentChildMappings = [
+            // Work-related injury hierarchy
+            'Work Accident' => ['Eye Injury At Work', 'Head Injury at Work', 'Back Injury at Work', 'Falls At Work'],
+            'Industrial Accidents' => ['Work Accident', 'Factory Accidents', 'Warehouse Accidents', 'Office Accidents'],
+            
+            // Injury type hierarchies  
+            'Serious Injury' => ['Eye Injury', 'Head Injury', 'Back Injury', 'Multiple & Major Injuries'],
+            'Eye Injury' => ['Eye Injury At Work'],
+            
+            // Service area hierarchies
+            'Personal Injury' => ['Work Accident', 'Industrial Accidents', 'Serious Injury'],
+        ];
+        
+        // Apply parent boosts based on high-scoring children
+        foreach ($candidateDocs as $index => $candidate) {
+            $candidateTitle = $candidate['title'];
+            
+            // Check if this candidate is a parent of any high-scoring pages
+            if (isset($parentChildMappings[$candidateTitle])) {
+                $childTitles = $parentChildMappings[$candidateTitle];
+                $highestChildScore = 0;
+                $foundHighScoringChild = false;
+                
+                foreach ($childTitles as $childTitle) {
+                    if (isset($titleToCandidate[$childTitle])) {
+                        $childIndex = $titleToCandidate[$childTitle];
+                        $childScore = $candidateDocs[$childIndex]['score'];
+                        
+                        // If child has high relevance (>0.8), boost parent
+                        if ($childScore > 0.8) {
+                            $highestChildScore = max($highestChildScore, $childScore);
+                            $foundHighScoringChild = true;
+                        }
+                    }
+                }
+                
+                // Apply parent boost: +15% of the highest child's score
+                if ($foundHighScoringChild) {
+                    $parentBoost = $highestChildScore * 0.15; // 15% boost based on child's score
+                    $originalScore = $candidateDocs[$index]['score'];
+                    $newScore = min($originalScore + $parentBoost, 1.0); // Cap at 1.0
+                    
+                    $candidateDocs[$index]['score'] = $newScore;
+                    $candidateDocs[$index]['parent_child_boost'] = round($parentBoost, 3);
+                    $candidateDocs[$index]['total_boost'] = round($newScore - $candidateDocs[$index]['original_score'], 3);
+                } else {
+                    $candidateDocs[$index]['parent_child_boost'] = 0;
+                }
+            } else {
+                $candidateDocs[$index]['parent_child_boost'] = 0;
+            }
+        }
+        
+        return $candidateDocs;
     }
 
     /**
@@ -3153,130 +3846,6 @@ Selection Rules:
     }
 
     /**
-     * Get essential link selection instructions that are always appended
-     */
-    private function getEssentialLinkSelectionInstructions(): string
-    {
-        return "
-
-RESPONSE FORMAT REQUIREMENTS:
-• You must respond with ONLY numbers separated by commas (e.g., '1,3,4,6,7') or 'none' if no links are relevant
-• Do not include any other text, explanations, or formatting
-• Do not use bullet points, dashes, or any other characters
-• Maximum 7 numbers total
-• Numbers must correspond to the document numbers listed above
-• IMPORTANT: List the numbers in order of importance (most important first)
-
-EXAMPLES OF CORRECT RESPONSES:
-- '5,1,3,7,2' (document 5 is most important, then 1, then 3, etc.)
-- '2,4,6' (document 2 is most important, then 4, then 6)
-- 'none' (no documents are relevant)
-- '1,9,4,6,7,3' (6 documents in order of importance)
-
-EXAMPLES OF INCORRECT RESPONSES:
-- 'I think documents 1 and 3 would be helpful'
-- '1, 3' (with spaces)
-- 'Documents 1 and 3'
-- '1. and 3.' (with periods)";
-    }
-
-    /**
-     * Get balanced content selection ensuring diverse page types
-     */
-    private function getBalancedContentSelection($candidateDocs, $maxResults = 7)
-    {
-        $selected = [];
-        $selectedIndices = [];
-        
-        // Sort by score first to prioritize quality
-        $sortedDocs = $candidateDocs;
-        usort($sortedDocs, function ($a, $b) {
-            return $b['score'] <=> $a['score'];
-        });
-        
-        // Create index mapping for original array
-        $indexMap = [];
-        foreach ($candidateDocs as $originalIndex => $doc) {
-            $indexMap[$doc['title'] . '|' . $doc['url']] = $originalIndex;
-        }
-        
-        // Priority content types to ensure inclusion
-        $requiredTypes = [
-            'legal_service_index' => 1,  // At least 1 index page
-            'legal_service' => 3,        // At least 3 service pages (increased from 2)
-            'blog_entry' => 1,           // At least 1 blog/article
-            'article' => 1,              // At least 1 article (in addition to blog_entry)
-            'calculator_entry' => 1,     // At least 1 calculator
-            'case_study' => 1            // At least 1 case study
-        ];
-        
-        $typeCount = [];
-        
-        // First pass: Ensure required types are included
-        foreach ($requiredTypes as $requiredType => $minCount) {
-            $found = 0;
-            foreach ($sortedDocs as $doc) {
-                if (count($selectedIndices) >= $maxResults) break;
-                
-                if ($doc['page_type'] === $requiredType && $found < $minCount) {
-                    $key = $doc['title'] . '|' . $doc['url'];
-                    if (isset($indexMap[$key])) {
-                        $selectedIndices[] = $indexMap[$key];
-                        $typeCount[$requiredType] = ($typeCount[$requiredType] ?? 0) + 1;
-                        $found++;
-                    }
-                }
-            }
-        }
-        
-        // Second pass: Fill remaining slots with highest scoring documents (any type)
-        foreach ($sortedDocs as $doc) {
-            if (count($selectedIndices) >= $maxResults) break;
-            
-            $key = $doc['title'] . '|' . $doc['url'];
-            if (isset($indexMap[$key]) && !in_array($indexMap[$key], $selectedIndices)) {
-                $selectedIndices[] = $indexMap[$key];
-                $type = $doc['page_type'] ?: 'unknown';
-                $typeCount[$type] = ($typeCount[$type] ?? 0) + 1;
-            }
-        }
-        
-        // Log the balanced selection
-        error_log("BALANCED SELECTION: Selected " . count($selectedIndices) . " documents with types: " . json_encode($typeCount));
-        
-        return $selectedIndices;
-    }
-
-    /**
-     * Get page type distribution for debugging
-     */
-    private function getPageTypeDistribution($documents)
-    {
-        $distribution = [];
-        foreach ($documents as $doc) {
-            $type = $doc['page_type'] ?? $doc['type'] ?? 'unknown';
-            $distribution[$type] = ($distribution[$type] ?? 0) + 1;
-        }
-        return $distribution;
-    }
-
-    /**
-     * Extract search terms from query for content matching
-     */
-    private function extractSearchTermsFromQuery($query)
-    {
-        // Remove common words and extract meaningful terms
-        $commonWords = ['the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'is', 'are', 'was', 'were', 'what', 'when', 'where', 'who', 'how', 'can', 'could', 'should', 'would', 'need', 'want', 'help', 'about', 'following', 'after', 'before', 'during', 'while'];
-        
-        $terms = preg_split('/\s+/', strtolower(trim($query)));
-        $meaningfulTerms = array_filter($terms, function($term) use ($commonWords) {
-            return strlen($term) > 2 && !in_array($term, $commonWords);
-        });
-        
-        return array_values($meaningfulTerms);
-    }
-
-    /**
      * Get parent specialism ID for a given specialism ID (optimized)
      */
     private function getParentSpecialismId($specialismId)
@@ -3293,7 +3862,6 @@ EXAMPLES OF INCORRECT RESPONSES:
                         // Verify the parent is also a valid specialism (not the root tree)
                         foreach ($allSpecialisms as $potentialParent) {
                             if ($potentialParent['treeNodeID'] == $parentId) {
-                                error_log("Found parent specialism: '{$potentialParent['treeNodeName']}' (ID: $parentId) for child '{$specialism['treeNodeName']}' (ID: $specialismId)");
                                 return $parentId;
                             }
                         }
@@ -3302,12 +3870,92 @@ EXAMPLES OF INCORRECT RESPONSES:
                 }
             }
             
-            error_log("No valid parent specialism found for ID $specialismId");
             return null;
             
         } catch (\Exception $e) {
-            error_log("Error getting parent specialism ID: " . $e->getMessage());
             return null;
         }
     }
+
+    /**
+     * Parse selected action IDs from AI response [ACTIONS:1,2,3] format
+     */
+    private function parseSelectedActions($aiResponse): array
+    {
+        $selectedActions = [];
+        
+        if (preg_match('/\[ACTIONS:([0-9,\s]+)\]/', $aiResponse, $matches)) {
+            $actionIds = explode(',', $matches[1]);
+            foreach ($actionIds as $id) {
+                $id = trim($id);
+                if (is_numeric($id)) {
+                    $selectedActions[] = (int)$id;
+                }
+            }
+        } else {
+        }
+        
+        return $selectedActions;
+    }
+    
+    /**
+     * Map service area string to specialism ID using exact matching against TopicTree specialisms
+     * Only uses exact matches to ensure portability across different sites with different specialism structures
+     */
+    private function mapServiceAreaToSpecialismId($serviceArea)
+    {
+        if (empty($serviceArea)) {
+            return null;
+        }
+        
+        try {
+            // Get all available specialisms from TopicTree
+            $specialisms = $this->getSpecialisms();
+            
+            if (empty($specialisms)) {
+                return null;
+            }
+            
+            // Convert service area to lowercase for case-insensitive matching
+            $serviceAreaLower = strtolower(trim($serviceArea));
+            
+            // Exact name match only (case insensitive)
+            foreach ($specialisms as $specialism) {
+                $specialismName = $specialism['treeNodeName'] ?? '';
+                if (strtolower(trim($specialismName)) === $serviceAreaLower) {
+                    return $specialism['treeNodeID'];
+                }
+            }
+            
+            return null;
+            
+        } catch (\Exception $e) {
+            error_log("Error mapping service area to specialism: " . $e->getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Get quick intent analysis prompt for service area detection in vector search
+     */
+    private function getQuickIntentAnalysisPrompt()
+    {
+        return "Analyze this legal query and identify the service area only. Respond with JSON format only.\n\n" .
+               "LEGAL SERVICE AREAS (identify the most specific match):\n" .
+               "- Work Accident (workplace injuries, industrial accidents, occupational injuries)\n" .
+               "- Medical Negligence (medical malpractice, hospital negligence, clinical negligence)\n" .
+               "- Road Accident (car accidents, traffic incidents, vehicle accidents)\n" .
+               "- Serious Injury (brain injury, spinal injury, amputation, severe injuries)\n" .
+               "- Other areas: Clinical Negligence, Personal Injury, Accident Claims\n\n" .
+               "OUTPUT FORMAT (JSON only):\n" .
+               "{\n" .
+               "  \"service_area\": \"Work Accident\" // or null if no clear match\n" .
+               "}\n\n" .
+               "EXAMPLES:\n" .
+               "- \"eye injury at work\" → \"Work Accident\"\n" .
+               "- \"car crash compensation\" → \"Road Accident\"\n" .
+               "- \"surgical error\" → \"Medical Negligence\"\n" .
+               "- \"brain injury claim\" → \"Serious Injury\"";
+    }
+
 }
