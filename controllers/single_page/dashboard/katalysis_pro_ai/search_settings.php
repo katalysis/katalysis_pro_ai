@@ -735,42 +735,8 @@ class SearchSettings extends DashboardPageController
             
 
             
-            // QUICK INTENT ANALYSIS: Get service area for vector search boosting
-            $serviceArea = '';
-            try {
-                $quickIntentPrompt = $this->getQuickIntentAnalysisPrompt();
-                $provider = $ragAgent->resolveProvider();
-                $provider->systemPrompt("You are a legal AI assistant that analyzes user queries to extract intent information. Always respond with valid JSON format.");
-                
-                $intentResponse = $provider->chat([new \NeuronAI\Chat\Messages\UserMessage("Query: \"$query\"\n\n$quickIntentPrompt")]);
-                $intentContent = $intentResponse->getContent();
-                
-                // Clean and parse intent response
-                $cleanedIntentContent = $intentContent;
-                if (preg_match('/```json\s*(.*?)\s*```/s', $cleanedIntentContent, $matches)) {
-                    $cleanedIntentContent = trim($matches[1]);
-                } else {
-                    $cleanedIntentContent = preg_replace('/```[a-z]*\s*|\s*```/', '', $cleanedIntentContent);
-                    $cleanedIntentContent = trim($cleanedIntentContent);
-                }
-                
-                $quickIntent = json_decode($cleanedIntentContent, true);
-                if ($quickIntent && isset($quickIntent['service_area'])) {
-                    $serviceArea = $quickIntent['service_area'];
-                }
-            } catch (\Exception $e) {
-                error_log("VECTOR SEARCH DEBUG - Quick intent analysis failed: " . $e->getMessage());
-            }
-            
-            // ENHANCED VECTOR SEARCH: Use service area boosting for better results
-            
-            if (!empty($serviceArea)) {
-                error_log("VECTOR SEARCH DEBUG - Using service area boosting for: '$serviceArea'");
-                $ragResults = $pageIndexService->getRelevantDocumentsWithBoost($query, $serviceArea, $vectorSearchTopK);
-            } else {
-                error_log("VECTOR SEARCH DEBUG - No service area detected, using standard search");
-                $ragResults = $pageIndexService->getRelevantDocuments($query, $vectorSearchTopK);
-            }
+            // VECTOR SEARCH: Use standard document retrieval for clean, unbiased results
+            $ragResults = $pageIndexService->getRelevantDocuments($query, $vectorSearchTopK);
             
             // DEBUG: Log how many results we got back
             $resultCount = is_array($ragResults) ? count($ragResults) : 0;
@@ -3935,27 +3901,6 @@ Selection Rules:
         }
     }
 
-    /**
-     * Get quick intent analysis prompt for service area detection in vector search
-     */
-    private function getQuickIntentAnalysisPrompt()
-    {
-        return "Analyze this legal query and identify the service area only. Respond with JSON format only.\n\n" .
-               "LEGAL SERVICE AREAS (identify the most specific match):\n" .
-               "- Work Accident (workplace injuries, industrial accidents, occupational injuries)\n" .
-               "- Medical Negligence (medical malpractice, hospital negligence, clinical negligence)\n" .
-               "- Road Accident (car accidents, traffic incidents, vehicle accidents)\n" .
-               "- Serious Injury (brain injury, spinal injury, amputation, severe injuries)\n" .
-               "- Other areas: Clinical Negligence, Personal Injury, Accident Claims\n\n" .
-               "OUTPUT FORMAT (JSON only):\n" .
-               "{\n" .
-               "  \"service_area\": \"Work Accident\" // or null if no clear match\n" .
-               "}\n\n" .
-               "EXAMPLES:\n" .
-               "- \"eye injury at work\" → \"Work Accident\"\n" .
-               "- \"car crash compensation\" → \"Road Accident\"\n" .
-               "- \"surgical error\" → \"Medical Negligence\"\n" .
-               "- \"brain injury claim\" → \"Serious Injury\"";
-    }
+
 
 }
