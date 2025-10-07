@@ -1,7 +1,13 @@
-
 {
     "name": "katalysis/katalysis_pro_ai",
     "type": "concrete5-package",
     "require": {
+        "typesense/typesense-php": "^5.0",
+        "symfony/http-client": "^5.4"
+    },
+    "config": {
+        "allow-plugins": {
+            "php-http/discovery": true
+        }
     }
 }

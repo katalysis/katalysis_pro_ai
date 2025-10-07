@@ -76,6 +76,12 @@ class Action
      */
     protected $showImmediately = false;
 
+     /**
+     * @var boolean
+     * @ORM\Column(name="`enabled`", type="boolean", nullable=false, options={"default"=false})
+     */
+    protected $enabled = false;
+
     
     /**
      * @return integer
@@ -155,6 +161,14 @@ class Action
     public function getShowImmediately()
     {
         return $this->showImmediately;
+    }
+
+    /**
+     * @return boolean
+     */
+    public function getEnabled()
+    {
+        return $this->enabled;
     }
 
     
@@ -255,6 +269,16 @@ class Action
     public function setShowImmediately($showImmediately)
     {
         $this->showImmediately = (bool)$showImmediately;
+         return $this;
+    }
+
+    /**
+     * @param boolean $enabled
+     * @return Action
+     */
+    public function setEnabled($enabled)
+    {
+        $this->enabled = (bool)$enabled;    
          return $this;
     }
 

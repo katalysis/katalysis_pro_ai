@@ -82,6 +82,44 @@ This package builds on the `katalysis_neuron_ai` foundation package, providing:
 - Dashboard integration with chat management and analytics
 - Environment-agnostic URL handling for multi-site compatibility
 
+## Debug & Development
+
+### Enhanced Debug Panel
+The Enhanced AI Search includes comprehensive debugging capabilities:
+
+#### People Section Debug Information
+- **Selection Logic**: Priority-based specialist matching with detailed workflow tracking
+- **Available People**: Full list of people loaded from database with count
+- **Fallback Mechanisms**: Automatic fallback to senior specialists when specialism-specific experts aren't available
+- **Performance Metrics**: Query timing and database operation tracking
+
+#### ServBay Development Environment
+For local development using ServBay:
+
+```bash
+# Monitor specialist selection in real-time
+tail -f /Applications/ServBay/package/var/log/php/8.3/errors.log | grep "SPECIALISTS DEBUG"
+
+# View people matching process  
+tail -f /Applications/ServBay/package/var/log/php/8.3/errors.log | grep "SPECIALISTS FORMAT"
+
+# Monitor AI analysis results
+tail -f /Applications/ServBay/package/var/log/php/8.3/errors.log | grep "AI ANALYSIS"
+```
+
+#### Debug Panel Data Structure
+The search API returns detailed debug information including:
+- `specialists_selection`: Priority logic, selection method, fallback usage
+- `available_people`: Names and count of people in database
+- `places_selection`: Location detection and office matching logic
+- `ai_analysis`: Full OpenAI categorization results
+- `performance_breakdown`: Timing for all search phases
+
+Enable debug panel via configuration:
+```php
+Config::set('katalysis.search.enable_debug_panel', true);
+```
+
 ## Technical Documentation
 
 For comprehensive technical documentation, see:

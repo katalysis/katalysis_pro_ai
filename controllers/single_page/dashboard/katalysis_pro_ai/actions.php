@@ -89,7 +89,8 @@ class Actions extends DashboardPageController
             $entry->setActionType($data["actionType"] ?? 'basic');
             $entry->setFormSteps($data["formSteps"] ?? '');
             $entry->setShowImmediately($data["showImmediately"] ?? false);
-            
+            $entry->setEnabled($data["enabled"] ?? false);
+
             $this->entityManager->persist($entry);
             $this->entityManager->flush();
             
@@ -117,6 +118,7 @@ class Actions extends DashboardPageController
             $this->set('actionType', $entry->getActionType() ?: 'basic');
             $this->set('formSteps', $entry->getFormSteps() ?: '');
             $this->set('showImmediately', $entry->getShowImmediately());
+            $this->set('enabled', $entry->getEnabled());
             $this->set('createdBy', $entry->getCreatedBy());
             $this->set('createdDate', $entry->getCreatedDate() ? $dateHelper->formatDateTime($entry->getCreatedDate()) : '');
             
@@ -135,6 +137,7 @@ class Actions extends DashboardPageController
             $this->set('actionType', 'basic');
             $this->set('formSteps', '');
             $this->set('showImmediately', false);
+            $this->set('enabled', false);
             $this->set('createdBy', '');
             $this->set('createdDate', '');
             $this->set('createdByName', '');

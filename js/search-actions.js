@@ -20,13 +20,21 @@
      * Called when search results are displayed
      */
     function initializeSearchActions(actions, aiResponse) {
+        console.log('SearchActions.initializeSearchActions called with:', {
+            actions: actions,
+            aiResponse: aiResponse,
+            actionsType: typeof actions,
+            actionsIsArray: Array.isArray(actions),
+            actionsLength: actions ? actions.length : 'N/A'
+        });
+        
         if (!actions || actions.length === 0) {
-            console.log('No actions available for search results');
+            console.log('SearchActions - No actions available for search results');
             return;
         }
 
-        console.log('Initializing search actions:', actions);
-        console.log('AI Response for action parsing:', aiResponse);
+        console.log('SearchActions - Initializing search actions:', actions);
+        console.log('SearchActions - AI Response for action parsing:', aiResponse);
         
         // Parse AI-selected actions from the response
         const aiSelectedActionIds = parseAiSelectedActions(aiResponse);
@@ -90,7 +98,7 @@
             // Basic filtering criteria:
             
             // 1. Action must have proper configuration
-            if (!action.name || !action.triggerInstruction) {
+            if (!action.name || !action.trigger_instruction) {
                 console.log('Filtering out action with incomplete config:', action.name);
                 return false;
             }
@@ -115,16 +123,49 @@
      * Display action buttons below AI response
      */
     function displayActionButtons(actions) {
-        const aiResponseSection = $('.katalysis-ai-search .ai-response-content');
+        console.log('SearchActions - displayActionButtons called with:', actions);
+        console.log('SearchActions - jQuery available:', typeof $ !== 'undefined');
+        console.log('SearchActions - Document ready state:', document.readyState);
         
-        if (aiResponseSection.length === 0) {
-            console.warn('AI response section not found for action buttons');
+        // Enhanced Search: Try to find the dedicated actions grid first
+        let actionsContainer = $('.katalysis-ai-enhanced-search .actions-grid');
+        let isEnhancedSearch = actionsContainer.length > 0;
+        
+        console.log('SearchActions - Enhanced search container query result:', {
+            selector: '.katalysis-ai-enhanced-search .actions-grid',
+            found: actionsContainer.length,
+            isEnhancedSearch: isEnhancedSearch
+        });
+        
+        // Fallback to original AI search structure
+        if (!isEnhancedSearch) {
+            actionsContainer = $('.katalysis-ai-search .ai-response-content');
+        }
+        
+        console.log('SearchActions - Container found:', {
+            isEnhancedSearch: isEnhancedSearch,
+            containerLength: actionsContainer.length,
+            containerSelector: isEnhancedSearch ? '.actions-grid' : '.ai-response-content'
+        });
+        
+        if (actionsContainer.length === 0) {
+            console.warn('SearchActions - No suitable container found for action buttons');
+            console.log('SearchActions - Available containers on page:');
+            console.log('  .katalysis-ai-enhanced-search:', $('.katalysis-ai-enhanced-search').length);
+            console.log('  .actions-section:', $('.actions-section').length);
+            console.log('  .actions-grid:', $('.actions-grid').length);
             return;
         }
 
         // Remove any existing action buttons and forms
-        aiResponseSection.find('.search-action-buttons').remove();
-        aiResponseSection.find('.search-action-form').remove();
+        if (isEnhancedSearch) {
+            // Enhanced search: clear the actions grid
+            actionsContainer.empty();
+        } else {
+            // Original search: remove from ai response content
+            actionsContainer.find('.search-action-buttons').remove();
+            actionsContainer.find('.search-action-form').remove();
+        }
         
         // Reset action state when displaying new buttons
         actionState = {
@@ -134,70 +175,76 @@
             completedSteps: []
         };
 
-        let actionButtonsHtml = '<div class="card bg-gradient-primary search-action-buttons mt-3">';
-        actionButtonsHtml += '<div class="card-body">';
-        actionButtonsHtml += '<h3>Next Steps</h3>';
-        actionButtonsHtml += '<p><strong>Choose an option here, contact one of our specialists or find out more from the relevant pages listed below:</strong></p>';
-        actionButtonsHtml += '<div class="d-flex flex-wrap gap-2">';
+        let actionButtonsHtml = '';
         
-        actions.forEach(function(action) {
-            actionButtonsHtml += `
-                <button type="button" 
-                        class="btn btn-primary search-action-btn" 
-                        data-action-id="${action.id}"
-                        data-action-name="${escapeHtml(action.name)}"
-                        data-action-trigger="${escapeHtml(action.triggerInstruction)}"
-                        data-action-response="${escapeHtml(action.responseInstruction)}">
-                    <i class="${action.icon}"></i>
-                    ${escapeHtml(action.name)}
-                </button>
-            `;
-        });
-        
-        actionButtonsHtml += '</div>';
-        actionButtonsHtml += '</div>';
-        actionButtonsHtml += '</div>';
+        if (isEnhancedSearch) {
+            // Enhanced Search: Use simpler button structure for actions grid
+            actions.forEach(function(action) {
+                actionButtonsHtml += `
+                    <button type="button" 
+                            class="btn search-action-btn mb-2 me-2" 
+                            data-action-id="${action.id}"
+                            data-action-name="${escapeHtml(action.name)}"
+                            data-action-trigger="${escapeHtml(action.trigger_instruction)}"
+                            data-action-response="${escapeHtml(action.response_instruction)}">
+                        <i class="${action.icon} me-2"></i>
+                        ${escapeHtml(action.name)}
+                    </button>
+                `;
+            });
+        } else {
+            // Original Search: Use card structure for AI response content
+            actionButtonsHtml = '<div class="card bg-gradient-primary search-action-buttons mt-3">';
+            actionButtonsHtml += '<div class="card-body">';
+            actionButtonsHtml += '<h3>Next Steps</h3>';
+            actionButtonsHtml += '<p><strong>Choose an option here, contact one of our specialists or find out more from the relevant pages listed below:</strong></p>';
+            actionButtonsHtml += '<div class="d-flex flex-wrap gap-2">';
+            
+            actions.forEach(function(action) {
+                actionButtonsHtml += `
+                    <button type="button" 
+                            class="btn btn-primary search-action-btn" 
+                            data-action-id="${action.id}"
+                            data-action-name="${escapeHtml(action.name)}"
+                            data-action-trigger="${escapeHtml(action.trigger_instruction)}"
+                            data-action-response="${escapeHtml(action.response_instruction)}">
+                        <i class="${action.icon}"></i>
+                        ${escapeHtml(action.name)}
+                    </button>
+                `;
+            });
+            
+            actionButtonsHtml += '</div>';
+            actionButtonsHtml += '</div>';
+            actionButtonsHtml += '</div>';
+        }
 
-        // Append action buttons to AI response
-        aiResponseSection.append(actionButtonsHtml);
+        // Append action buttons to appropriate container
+        console.log('SearchActions - Appending HTML to container:', actionButtonsHtml.substring(0, 200) + '...');
+        actionsContainer.append(actionButtonsHtml);
 
         // Bind click events
         bindActionButtonEvents();
-        
-        console.log('Action buttons displayed for', actions.length, 'actions');
+
     }
 
     /**
      * Bind click events to action buttons
      */
     function bindActionButtonEvents() {
-        console.log('=== Binding Action Button Events ===');
-        $(document).off('click', '.search-action-btn').on('click', '.search-action-btn', function(e) {
+        // Remove any existing event handlers first
+        $(document).off('click.searchActions', '.search-action-btn');
+        
+        // Bind click events to action buttons
+        $(document).on('click.searchActions', '.search-action-btn', function(e) {
             e.preventDefault();
-            console.log('=== ACTION BUTTON CLICKED ===');
+            e.stopPropagation();
             
-            const actionId = $(this).data('action-id');
-            const actionName = $(this).data('action-name');
-            const triggerInstruction = $(this).data('action-trigger');
-            const responseInstruction = $(this).data('action-response');
-            
-            console.log('Button data:', {
-                actionId: actionId,
-                actionName: actionName,
-                triggerInstruction: triggerInstruction,
-                responseInstruction: responseInstruction
-            });
-            
-            // Test the endpoint directly first
-            console.log('Testing action details endpoint...');
-            fetch('/dashboard/katalysis_pro_ai/search_settings/get_action_details/' + actionId)
-                .then(response => response.json())
-                .then(data => {
-                    console.log('Raw endpoint response:', data);
-                })
-                .catch(error => {
-                    console.error('Endpoint test failed:', error);
-                });
+            const $btn = $(this);
+            const actionId = $btn.data('action-id');
+            const actionName = $btn.data('action-name');
+            const triggerInstruction = $btn.data('action-trigger');
+            const responseInstruction = $btn.data('action-response');
             
             startActionFromButton(actionId, actionName, triggerInstruction, responseInstruction);
         });
@@ -205,10 +252,6 @@
      * Start an action when button is clicked
      */
     function startActionFromButton(actionId, actionName, triggerInstruction, responseInstruction) {
-        console.log('=== Starting Action ===');
-        console.log('Action ID:', actionId);
-        console.log('Action Name:', actionName);
-        
         // Remove any existing forms first
         $('.search-action-form').remove();
         
@@ -218,14 +261,8 @@
         actionState.formData = {};
         actionState.completedSteps = [];
 
-        console.log('Getting action details from server...');
-
         // Get action details from server and start form flow
         getActionDetails(actionId).then(function(actionDetails) {
-            console.log('=== Received Action Details ===');
-            console.log('Full actionDetails:', actionDetails);
-            console.log('formSteps (raw):', actionDetails.formSteps);
-            console.log('formSteps type:', typeof actionDetails.formSteps);
             
             if (actionDetails && actionDetails.formSteps) {
                 try {
@@ -233,9 +270,7 @@
                     
                     // Handle both string and object formSteps
                     if (typeof actionDetails.formSteps === 'string') {
-                        console.log('Parsing formSteps string:', actionDetails.formSteps);
                         if (actionDetails.formSteps.trim() === '') {
-                            console.log('Empty formSteps string, falling back to simple action');
                             executeSimpleAction(actionDetails);
                             return;
                         }
@@ -244,14 +279,7 @@
                         formSteps = actionDetails.formSteps;
                     }
                     
-                    console.log('=== Parsed Form Steps ===');
-                    console.log('Parsed formSteps:', formSteps);
-                    console.log('Is array:', Array.isArray(formSteps));
-                    console.log('Length:', formSteps ? formSteps.length : 'N/A');
-                    
                     if (formSteps && Array.isArray(formSteps) && formSteps.length > 0) {
-                        console.log('Starting multi-step form with', formSteps.length, 'items');
-                        
                         // Check if this is database format (fields directly) or test format (nested under steps)
                         let hasValidFields = false;
                         let isDatabaseFormat = false;
@@ -259,47 +287,29 @@
                         // Check first item to determine format
                         const firstItem = formSteps[0];
                         if (firstItem.stepKey || firstItem.fieldType || firstItem.question) {
-                            console.log('=== DATABASE FORMAT DETECTED ===');
                             isDatabaseFormat = true;
-                            // Each item in formSteps IS a field
-                            formSteps.forEach((field, index) => {
-                                console.log(`=== Database Field ${index} ===`);
-                                console.log(`Field ${index} full object:`, JSON.stringify(field, null, 2));
-                                console.log(`Field ${index} stepKey:`, field.stepKey);
-                                console.log(`Field ${index} fieldType:`, field.fieldType);
-                                console.log(`Field ${index} question:`, field.question);
-                                
+                            // Each item in formSteps IS a field - validate they have required properties
+                            formSteps.forEach((field) => {
                                 if (field.stepKey && field.fieldType && field.question) {
-                                    console.log(`Field ${index} HAS VALID DATABASE STRUCTURE`);
                                     hasValidFields = true;
                                 }
                             });
                         } else {
-                            console.log('=== TEST FORMAT DETECTED ===');
                             // Old test format with nested fields
-                            formSteps.forEach((step, index) => {
-                                console.log(`=== Test Step ${index} ===`);
-                                console.log(`Step ${index} full object:`, JSON.stringify(step, null, 2));
-                                console.log(`Step ${index} has title:`, step.title || 'NO TITLE');
-                                console.log(`Step ${index} fields (length):`, step.fields ? step.fields.length : 'N/A');
-                                
+                            formSteps.forEach((step) => {
                                 if (step.fields && Array.isArray(step.fields) && step.fields.length > 0) {
-                                    console.log(`Step ${index} HAS VALID FIELDS:`, step.fields.length, 'fields');
                                     hasValidFields = true;
                                 }
                             });
                         }
                         
                         if (hasValidFields) {
-                            console.log('Using', isDatabaseFormat ? 'database' : 'test', 'form steps');
                             displayActionForm(actionDetails, formSteps);
                         } else {
-                            console.log('No valid steps found in database, creating test form steps...');
                             // Create test form steps based on action type
                             let testFormSteps = [];
                             
                             if (actionDetails.name && actionDetails.name.toLowerCase().includes('meeting')) {
-                                console.log('Creating meeting form steps');
                                 testFormSteps = [
                                     {
                                         title: "Personal Information",
@@ -585,31 +595,9 @@
      * Display action form for multi-step actions
      */
     function displayActionForm(actionDetails, formSteps) {
-        console.log('=== DISPLAY ACTION FORM CALLED ===');
-        console.log('Action details:', actionDetails);
-        console.log('Form steps:', formSteps);
-        
         // Determine if this is a simple form (all fields at once, no steps)
         // Only simple_form type shows all fields at once
         const isSimpleForm = actionDetails.actionType === 'simple_form';
-        
-        console.log('=== FORM TYPE DETECTION ===');
-        console.log('Action Type:', actionDetails.actionType);
-        console.log('Form Steps Length:', formSteps.length);
-        console.log('Is Simple Form (all fields at once):', isSimpleForm);
-        console.log('Form Steps:', formSteps);
-        
-        if (isSimpleForm) {
-            console.log('SIMPLE_FORM TYPE - All fields will show at once, no step navigation');
-        } else if (actionDetails.actionType === 'form') {
-            console.log('FORM TYPE - Static multi-step form with step navigation');
-        } else if (actionDetails.actionType === 'dynamic_form') {
-            console.log('DYNAMIC_FORM TYPE - AI-controlled multi-step form with step navigation');
-        } else if (actionDetails.actionType === 'basic') {
-            console.log('BASIC TYPE - Simple button, should not reach form display');
-        } else {
-            console.log('UNKNOWN TYPE - Defaulting to step navigation');
-        }
         
         // Create form modal or inline form area
         const formHtml = createActionFormHtml(actionDetails, formSteps, isSimpleForm);
@@ -617,8 +605,19 @@
         // Remove any existing action form
         $('.search-action-form').remove();
         
-        // Add form after action buttons
-        $('.search-action-buttons').after(formHtml);
+        // Add form after action buttons - handle both Enhanced and Original search structures
+        let insertTarget = $('.search-action-buttons'); // Original search
+        
+        if (insertTarget.length === 0) {
+            // Enhanced search - use actions-grid
+            insertTarget = $('.actions-grid');
+        }
+        
+        if (insertTarget.length > 0) {
+            insertTarget.after(formHtml);
+        } else {
+            console.error('No suitable container found for form insertion');
+        }
         
         // Initialize form step
         console.log('Starting form at step 0 with actionState:', actionState);
@@ -683,11 +682,6 @@
      * Display a specific form step
      */
     function displayFormStep(stepIndex, formSteps, isSimpleForm = false) {
-        console.log('=== DISPLAY FORM STEP CALLED ===');
-        console.log('Step Index:', stepIndex);
-        console.log('Total Steps:', formSteps.length);
-        console.log('Is Simple Form:', isSimpleForm);
-        
         if (!isSimpleForm && (stepIndex < 0 || stepIndex >= formSteps.length)) {
             console.error('Invalid step index:', stepIndex, 'Total steps:', formSteps.length);
             return;
@@ -696,25 +690,20 @@
         actionState.currentStepIndex = stepIndex;
 
         if (isSimpleForm) {
-            console.log('=== SIMPLE FORM - DISPLAYING ALL FIELDS AT ONCE ===');
             // For simple forms, display ALL fields at once (without step headers)
             let allFieldsHtml = `<div class="form-step simple-form-all-fields" data-step-index="all">`;
             
             // Database format: each item in formSteps array IS a field
             formSteps.forEach(function(field, fieldIdx) {
-                console.log('Processing field', fieldIdx, 'for simple form:', field);
                 if (field.stepKey || field.name) {
                     allFieldsHtml += createFormField(field);
                 }
             });
             
             allFieldsHtml += '</div>';
-            console.log('=== SIMPLE FORM HTML GENERATED ===');
             $('.search-action-form .action-form-content').html(allFieldsHtml);
             
         } else {
-            console.log('=== STEP FORM - DISPLAYING STEP', stepIndex, '===');
-            
             // For database format, we need to group fields by some criteria or treat each as a step
             // For now, let's assume one field per step for dynamic_form and form types
             if (stepIndex >= formSteps.length) {
@@ -723,19 +712,16 @@
             }
             
             const field = formSteps[stepIndex];
-            console.log('Current field object:', field);
 
             // Update progress
             const progress = ((stepIndex + 1) / formSteps.length) * 100;
             $('.search-action-form .progress-bar').css('width', progress + '%');
             $('.search-action-form .current-step').text(stepIndex + 1);
-            console.log('Updated progress:', progress + '%', 'Step:', stepIndex + 1, 'of', formSteps.length);
 
             // Create step content - one field per step
             let stepHtml = `<div class="form-step" data-step-index="${stepIndex}">`;
             
             if (field.stepKey || field.name) {
-                console.log('Adding field for step', stepIndex);
                 stepHtml += createFormField(field);
             } else {
                 console.warn('No valid field found for step', stepIndex, 'Field data:', field);
@@ -743,8 +729,6 @@
             }
 
             stepHtml += '</div>';
-
-            console.log('=== STEP FORM HTML GENERATED ===');
             $('.search-action-form .action-form-content').html(stepHtml);
         }
         
@@ -783,7 +767,7 @@
         const fieldId = 'field_' + fieldName;
         const currentValue = actionState.formData[fieldName] || '';
 
-        console.log('Creating form field:', fieldName, 'type:', fieldType, 'label:', fieldLabel, 'required:', isRequired);
+
 
         let fieldHtml = `<div class="mb-3">`;
         
@@ -888,7 +872,7 @@
 
         fieldHtml += '</div>';
         
-        console.log('Generated field HTML for', field.name, ':', fieldHtml);
+
         return fieldHtml;
     }
 
@@ -1080,7 +1064,7 @@
         // Add to form messages area if form exists, otherwise add to search results
         const messageContainer = $('.search-action-form .action-form-messages').length > 0 
             ? $('.search-action-form .action-form-messages')
-            : $('.katalysis-ai-search .ai-response-content');
+            : $('.katalysis-ai-enhanced-search .ai-response-content, .katalysis-ai-search .ai-response-content');
 
         messageContainer.append(messageHtml);
 
@@ -1114,7 +1098,8 @@
     window.SearchActions = {
         initializeSearchActions: initializeSearchActions,
         displayActionButtons: displayActionButtons,
-        startActionFromButton: startActionFromButton
+        startActionFromButton: startActionFromButton,
+        bindActionButtonEvents: bindActionButtonEvents
     };
 
 })();

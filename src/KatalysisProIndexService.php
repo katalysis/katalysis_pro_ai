@@ -4,7 +4,9 @@ namespace KatalysisProAi;
 
 
 use KatalysisProAi\KatalysisProVectorStore;
+use KatalysisProAi\TypesenseVectorStoreFactory;
 use NeuronAI\RAG\Document;
+use NeuronAI\RAG\VectorStore\VectorStoreInterface;
 use Concrete\Core\Support\Facade\Database;
 use NeuronAI\RAG\Embeddings\OpenAIEmbeddingsProvider;
 use Concrete\Package\KatalysisPro\Src\KatalysisPro\People\Person;
@@ -12,31 +14,58 @@ use Concrete\Core\Support\Facade\Config;
 
 class KatalysisProIndexService
 {
-    private KatalysisProVectorStore $peopleStore;
-    private KatalysisProVectorStore $reviewsStore;
-    private KatalysisProVectorStore $placesStore;
+    private VectorStoreInterface $peopleStore;
+    private VectorStoreInterface $reviewsStore;
+    private VectorStoreInterface $placesStore;
     private OpenAIEmbeddingsProvider $embeddingsProvider;
 
     public function __construct()
     {
-        // Create vector store directory
-        $storeDirectory = DIR_FILES_UPLOADED_STANDARD . '/neuron';
-        if (!is_dir($storeDirectory)) {
-            mkdir($storeDirectory, 0755, true);
-        }
-
-        // Create separate vector stores for each entity type
-        $this->peopleStore = new KatalysisProVectorStore($storeDirectory, 5, 'people', '.store');
-        $this->reviewsStore = new KatalysisProVectorStore($storeDirectory, 5, 'reviews', '.store');
-        $this->placesStore = new KatalysisProVectorStore($storeDirectory, 3, 'places', '.store');
-        
-        $apiKey = Config::get('katalysis.ai.open_ai_key');
-        error_log("DEBUG: OpenAI API Key configured: " . (!empty($apiKey) ? 'Yes' : 'No'));
-        
+        $apiKey = Config::get('app.api.openai.api_key');
         $this->embeddingsProvider = new OpenAIEmbeddingsProvider(
             $apiKey,
             'text-embedding-3-small'
         );
+        
+        // Detect actual embedding dimensions from OpenAI
+        $vectorDimensions = $this->detectEmbeddingDimensions();
+        
+        // Create separate vector stores for each entity type using detected dimensions
+        $this->peopleStore = TypesenseVectorStoreFactory::create('people', 5, $vectorDimensions);
+        $this->reviewsStore = TypesenseVectorStoreFactory::create('reviews', 5, $vectorDimensions);
+        $this->placesStore = TypesenseVectorStoreFactory::create('places', 3, $vectorDimensions);
+    }
+    
+    /**
+     * Detect the actual embedding dimensions from OpenAI
+     */
+    private function detectEmbeddingDimensions(): int
+    {
+        try {
+            // Generate a test embedding to detect dimensions
+            $testEmbedding = $this->embeddingsProvider->embedText("Test text for dimension detection");
+            return count($testEmbedding);
+        } catch (\Exception $e) {
+            error_log("Warning: Could not detect embedding dimensions, using default 1536: " . $e->getMessage());
+            return 1536; // Fallback to default
+        }
+    }
+    
+    /**
+     * Clear vector store by deleting all documents
+     * Helper method to work with VectorStoreInterface
+     */
+    private function clearVectorStore(VectorStoreInterface $store): void
+    {
+        // For compatibility with both FileVectorStore and TypesenseVectorStore
+        if ($store instanceof KatalysisProVectorStore) {
+            $store->clearStore();
+        } else {
+            // For TypesenseVectorStore, we need to handle clearing differently
+            // Since deleteBySource requires specific source types, we'll skip clearing
+            // and rely on document IDs to prevent duplicates
+            // Vector store clearing skipped for Typesense - using document ID deduplication
+        }
     }
     
     /**
@@ -47,7 +76,8 @@ class KatalysisProIndexService
         echo "Building People Vector Index...\n";
         
         // Clear existing index to prevent duplicates
-        $this->peopleStore->clearStore();
+        // Note: VectorStoreInterface doesn't have clearStore(), but we can recreate it
+        $this->clearVectorStore($this->peopleStore);
         
         $db = Database::get();
         $people = $db->GetAll("SELECT sID, name, jobTitle, email, phone, page, featured, active, biography, shortBiography FROM KatalysisPeople WHERE active = 1");
@@ -63,16 +93,16 @@ class KatalysisProIndexService
                 $document->sourceName = $person['name'];
                 $document->id = 'person_' . $person['sID'];
                 
-                // Add metadata for retrieval
-                $document->addMetadata('person_id', $person['sID']);
-                $document->addMetadata('name', $person['name']);
-                $document->addMetadata('job_title', $person['jobTitle']);
-                $document->addMetadata('email', $person['email']);
-                $document->addMetadata('phone', $person['phone']);
-                $document->addMetadata('page', $person['page']);
-                $document->addMetadata('featured', (bool)$person['featured']);
-                $document->addMetadata('biography', $person['biography']);
-                $document->addMetadata('short_biography', $person['shortBiography']);
+                // Add metadata for retrieval (convert all to strings for Typesense compatibility)
+                $document->addMetadata('person_id', (string)$person['sID']);
+                $document->addMetadata('name', (string)($person['name'] ?? ''));
+                $document->addMetadata('job_title', (string)($person['jobTitle'] ?? ''));
+                $document->addMetadata('email', (string)($person['email'] ?? ''));
+                $document->addMetadata('phone', (string)($person['phone'] ?? ''));
+                $document->addMetadata('page', (string)($person['page'] ?? ''));
+                $document->addMetadata('featured', $person['featured'] ? 'true' : 'false');
+                $document->addMetadata('biography', (string)($person['biography'] ?? ''));
+                $document->addMetadata('short_biography', (string)($person['shortBiography'] ?? ''));
                 
                 // Try to add additional metadata from Person object
                 try {
@@ -82,7 +112,7 @@ class KatalysisProIndexService
                             $specialisms = $personObj->getSpecialisms($person['sID']);
                             $document->addMetadata('specialisms', json_encode($specialisms));
                         } catch (\Exception $e) {
-                            error_log("DEBUG: Error getting specialisms for metadata: " . $e->getMessage());
+                            // Skip specialisms metadata if error
                             $document->addMetadata('specialisms', json_encode([]));
                         }
                         
@@ -90,7 +120,7 @@ class KatalysisProIndexService
                             $topics = $personObj->getTopics($person['sID']);
                             $document->addMetadata('topics', json_encode($topics));
                         } catch (\Exception $e) {
-                            error_log("DEBUG: Error getting topics for metadata: " . $e->getMessage());
+                            // Skip topics metadata if error
                             $document->addMetadata('topics', json_encode([]));
                         }
                         
@@ -98,12 +128,12 @@ class KatalysisProIndexService
                             $places = $personObj->getPlaces($person['sID']);
                             $document->addMetadata('places', json_encode($places));
                         } catch (\Exception $e) {
-                            error_log("DEBUG: Error getting places for metadata: " . $e->getMessage());
+                            // Skip places metadata if error
                             $document->addMetadata('places', json_encode([]));
                         }
                     }
                 } catch (\Exception $e) {
-                    error_log("DEBUG: Error creating Person object for metadata: " . $e->getMessage());
+                    // Skip person metadata if error creating object
                 }
                 
                 $documents[] = $document;
@@ -111,8 +141,26 @@ class KatalysisProIndexService
         }
         
         if (!empty($documents)) {
-            $this->peopleStore->addDocuments($documents);
-            echo "Indexed " . count($documents) . " people.\n";
+            try {
+                // Generate embeddings for documents before adding
+                foreach ($documents as $document) {
+                    if (empty($document->getEmbedding())) {
+                        $embedding = $this->embeddingsProvider->embedText($document->getContent());
+                        $document->embedding = $embedding; // Set directly as it's a public property
+                    }
+                }
+                
+                echo "Adding " . count($documents) . " people to Typesense...\n";
+                $this->peopleStore->addDocuments($documents);
+                echo "Successfully indexed " . count($documents) . " people.\n";
+            } catch (\Exception $e) {
+                echo "ERROR indexing people: " . $e->getMessage() . "\n";
+                error_log("TYPESENSE PEOPLE INDEX ERROR: " . $e->getMessage());
+                error_log("TYPESENSE PEOPLE INDEX TRACE: " . $e->getTraceAsString());
+                throw $e; // Re-throw to stop the task
+            }
+        } else {
+            echo "No people found to index.\n";
         }
     }
     
@@ -124,7 +172,7 @@ class KatalysisProIndexService
         echo "Building Reviews Vector Index...\n";
         
         // Clear existing index to prevent duplicates
-        $this->reviewsStore->clearStore();
+        $this->clearVectorStore($this->reviewsStore);
         
         $db = Database::get();
         $reviews = $db->GetAll("SELECT sID, author, organization, rating, extract, review, source, featured, active FROM KatalysisReviews WHERE active = 1");
@@ -140,22 +188,40 @@ class KatalysisProIndexService
                 $document->sourceName = $review['author'] ?: 'Client Review';
                 $document->id = 'review_' . $review['sID'];
                 
-                // Add metadata
-                $document->addMetadata('review_id', $review['sID']);
-                $document->addMetadata('author', $review['author']);
-                $document->addMetadata('organization', $review['organization']);
-                $document->addMetadata('rating', (int)$review['rating']);
-                $document->addMetadata('source', $review['source']);
-                $document->addMetadata('featured', (bool)$review['featured']);
-                $document->addMetadata('full_review', $review['review']);
+                // Add metadata (convert all to strings for Typesense compatibility)
+                $document->addMetadata('review_id', (string)$review['sID']);
+                $document->addMetadata('author', (string)($review['author'] ?? ''));
+                $document->addMetadata('organization', (string)($review['organization'] ?? ''));
+                $document->addMetadata('rating', (string)$review['rating']);
+                $document->addMetadata('source', (string)($review['source'] ?? ''));
+                $document->addMetadata('featured', $review['featured'] ? 'true' : 'false');
+                $document->addMetadata('full_review', (string)($review['review'] ?? ''));
                 
                 $documents[] = $document;
             }
         }
         
         if (!empty($documents)) {
-            $this->reviewsStore->addDocuments($documents);
-            echo "Indexed " . count($documents) . " reviews.\n";
+            try {
+                // Generate embeddings for documents before adding
+                foreach ($documents as $document) {
+                    if (empty($document->getEmbedding())) {
+                        $embedding = $this->embeddingsProvider->embedText($document->getContent());
+                        $document->embedding = $embedding;
+                    }
+                }
+                
+                echo "Adding " . count($documents) . " reviews to Typesense...\n";
+                $this->reviewsStore->addDocuments($documents);
+                echo "Successfully indexed " . count($documents) . " reviews.\n";
+            } catch (\Exception $e) {
+                echo "ERROR indexing reviews: " . $e->getMessage() . "\n";
+                error_log("TYPESENSE REVIEWS INDEX ERROR: " . $e->getMessage());
+                error_log("TYPESENSE REVIEWS INDEX TRACE: " . $e->getTraceAsString());
+                throw $e;
+            }
+        } else {
+            echo "No reviews found to index.\n";
         }
     }
     
@@ -167,7 +233,7 @@ class KatalysisProIndexService
         echo "Building Places Vector Index...\n";
         
         // Clear existing index to prevent duplicates
-        $this->placesStore->clearStore();
+        $this->clearVectorStore($this->placesStore);
         
         $db = Database::get();
         $places = $db->GetAll("SELECT sID, name, address1, address2, town, county, postcode, description, phone, email FROM KatalysisPlaces WHERE active = 1");
@@ -197,30 +263,43 @@ class KatalysisProIndexService
                 $document->sourceName = $place['name'];
                 $document->id = 'place_' . $place['sID'];
                 
-                $document->addMetadata('place_id', $place['sID']);
-                $document->addMetadata('name', $place['name']);
-                $document->addMetadata('description', $place['description']);
-                $document->addMetadata('address', trim($place['address1'] . ' ' . $place['address2']));
-                $document->addMetadata('town', $place['town']);
-                $document->addMetadata('county', $place['county']);
-                $document->addMetadata('postcode', $place['postcode']);
-                $document->addMetadata('phone', $place['phone']);
-                $document->addMetadata('email', $place['email']);
+                $document->addMetadata('place_id', (string)$place['sID']);
+                $document->addMetadata('name', (string)($place['name'] ?? ''));
+                $document->addMetadata('description', (string)($place['description'] ?? ''));
+                $document->addMetadata('address', (string)trim(($place['address1'] ?? '') . ' ' . ($place['address2'] ?? '')));
+                $document->addMetadata('town', (string)($place['town'] ?? ''));
+                $document->addMetadata('county', (string)($place['county'] ?? ''));
+                $document->addMetadata('postcode', (string)($place['postcode'] ?? ''));
+                $document->addMetadata('phone', (string)($place['phone'] ?? ''));
+                $document->addMetadata('email', (string)($place['email'] ?? ''));
                 
                 $documents[] = $document;
             }
         }
         
         if (!empty($documents)) {
-            error_log("DEBUG: About to add " . count($documents) . " place documents to vector store");
             try {
+                // Generate embeddings for documents before adding
+                echo "Generating embeddings for " . count($documents) . " places...\n";
+                foreach ($documents as $document) {
+                    if (empty($document->getEmbedding())) {
+                        $embedding = $this->embeddingsProvider->embedText($document->getContent());
+                        $document->embedding = $embedding;
+                    }
+                }
+                
+                echo "Adding " . count($documents) . " places to Typesense...\n";
                 $this->placesStore->addDocuments($documents);
-                echo "Indexed " . count($documents) . " places.\n";
-                error_log("DEBUG: Successfully added place documents to vector store");
+                echo "Successfully indexed " . count($documents) . " places.\n";
+                // Successfully added place documents to vector store
             } catch (\Exception $e) {
-                error_log("ERROR: Failed to add place documents: " . $e->getMessage());
+                echo "ERROR indexing places: " . $e->getMessage() . "\n";
+                error_log("TYPESENSE PLACES INDEX ERROR: " . $e->getMessage());
+                error_log("TYPESENSE PLACES INDEX TRACE: " . $e->getTraceAsString());
                 throw $e;
             }
+        } else {
+            echo "No places found to index.\n";
         }
     }
     
@@ -318,36 +397,32 @@ class KatalysisProIndexService
         
         // Try to get specialisms and add them to content
         try {
-            error_log("DEBUG: Getting Person object for sID: " . $person['sID']);
             $personObj = Person::getByID($person['sID']);
             if ($personObj) {
-                error_log("DEBUG: Person object created successfully");
                 try {
                     $specialisms = $personObj->getSpecialisms($person['sID']);
-                    error_log("DEBUG: Got specialisms: " . json_encode($specialisms));
                     if (!empty($specialisms)) {
                         $specialismNames = array_column($specialisms, 'treeNodeName');
                         $content[] = "Specializes in: " . implode(', ', $specialismNames);
                     }
                 } catch (\Exception $e) {
-                    error_log("DEBUG: Error getting specialisms: " . $e->getMessage());
+                    // Skip specialisms if error
                 }
                 
                 try {
                     $places = $personObj->getPlaces($person['sID']);
-                    error_log("DEBUG: Got places: " . json_encode($places));
                     if (!empty($places)) {
                         $placeNames = array_column($places, 'name');
                         $content[] = "Serves locations: " . implode(', ', $placeNames);
                     }
                 } catch (\Exception $e) {
-                    error_log("DEBUG: Error getting places: " . $e->getMessage());
+                    // Skip places if error
                 }
             } else {
-                error_log("DEBUG: Person object is null for sID: " . $person['sID']);
+                // Person object is null
             }
         } catch (\Exception $e) {
-            error_log("DEBUG: Error creating Person object: " . $e->getMessage());
+            // Error creating Person object
         }
         
         return implode('. ', array_filter($content));

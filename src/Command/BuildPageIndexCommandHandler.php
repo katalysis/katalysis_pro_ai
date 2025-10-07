@@ -17,7 +17,16 @@ class BuildPageIndexCommandHandler
             $selectedStores = $command->getSelectedStores();
             $storeInfo = empty($selectedStores) ? 'all stores' : implode(', ', $selectedStores);
             
-            Log::addInfo("Starting batch page index rebuild preparation for: {$storeInfo}");
+            // Add info about page filtering
+            $pageInfo = '';
+            if ($command->hasSpecificPages()) {
+                $pageIds = $command->getPageIds();
+                $pageCount = count($pageIds);
+                $pageInfo = " (filtering {$pageCount} specific pages: " . implode(', ', array_slice($pageIds, 0, 10)) . 
+                           ($pageCount > 10 ? ', ...' : '') . ")";
+            }
+            
+            Log::addInfo("Starting batch page index rebuild preparation for: {$storeInfo}{$pageInfo}");
             
             $pageIndexService = new PageIndexService();
             
@@ -28,7 +37,8 @@ class BuildPageIndexCommandHandler
             }
             
             // Get pages organized by store type
-            $pagesByType = $pageIndexService->buildIndex($selectedStores);
+            $pageIds = $command->getPageIds();
+            $pagesByType = $pageIndexService->buildIndex($selectedStores, $pageIds);
             
             // Create batch with individual page indexing commands for each relevant page
             $batch = Batch::create();

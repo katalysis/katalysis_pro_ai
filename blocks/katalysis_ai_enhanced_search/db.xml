@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schema version="0.3">
+    <table name="btKatalysisAiEnhancedSearch">
+        <field name="bID" type="I">
+            <key/>
+            <unsigned/>
+        </field>
+        <field name="searchPlaceholder" type="C" size="255">
+            <default value="How can we help you today?"/>
+        </field>
+        <field name="displayMode" type="C" size="50">
+            <default value="inline"/>
+        </field>
+        <field name="resultsPageId" type="I">
+            <default value="0"/>
+            <unsigned/>
+        </field>
+        <field name="searchButtonText" type="C" size="255">
+            <default value="Search"/>
+        </field>
+    </table>
+</schema>

@@ -92,6 +92,12 @@ class Chat
 
     /**
      * @var string
+     * @ORM\Column(name="`chatHistory`", type="text", nullable=true)
+     */
+    protected $chatHistory = '';
+
+    /**
+     * @var string
      * @ORM\Column(name="`utmId`", type="string", nullable=true)
      */
     protected $utmId = '';
@@ -269,6 +275,14 @@ class Chat
     public function getCompleteChatHistory()
     {
         return $this->completeChatHistory;
+    }
+
+    /**
+     * @return string
+     */
+    public function getChatHistory()
+    {
+        return $this->chatHistory;
     }
 
     /**
@@ -501,6 +515,16 @@ class Chat
     public function setCompleteChatHistory($completeChatHistory)
     {
         $this->completeChatHistory = $completeChatHistory;
+         return $this;
+    }
+
+    /**
+     * @param string $chatHistory
+     * @return Chat
+     */
+    public function setChatHistory($chatHistory)
+    {
+        $this->chatHistory = $chatHistory;
          return $this;
     }
 

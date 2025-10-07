@@ -8,8 +8,18 @@ if ($googleMapsApiKey) {
     $this->addHeaderItem('<script type="text/javascript" src="//maps.google.com/maps/api/js?key=' . $googleMapsApiKey . '"></script>');
 }
 
-// Add search actions JavaScript
-$this->addFooterItem('<script src="/packages/katalysis_pro_ai/js/search-actions.js"></script>');
+// Add search actions JavaScript (prevent duplicates)
+$searchActionsScript = '
+<script>
+if (!window.SearchActionsLoaded) {
+    window.SearchActionsLoaded = true;
+    var script = document.createElement("script");
+    script.src = "/packages/katalysis_pro_ai/js/search-actions.js";
+    script.async = false;
+    document.head.appendChild(script);
+}
+</script>';
+$this->addFooterItem($searchActionsScript);
 ?>
 <style>
     .ccm-page .katalysis-ai-search h3{

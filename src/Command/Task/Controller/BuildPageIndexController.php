@@ -28,68 +28,40 @@ class BuildPageIndexController extends AbstractController
 
     public function getName(): string
     {
-        return t("Build Page Index (By Page Type)");
+        return t("Build Page Index");
     }
 
     public function getDescription(): string
     {
-        return t("Builds vector indexes organized by page type. Select specific page types to rebuild or choose 'Select All' for all types. Each page type creates its own .store file named by the page type handle.");
+        return t("Builds a unified vector index for AI search and chat bot, including all page types for maximum intelligence and comprehensive search coverage.");
     }
 
     public function getInputDefinition(): ?Definition
     {
         $definition = new Definition();
         
-        // Get available page types from PageIndexService
-        $pageIndexService = new PageIndexService();
-        $pageTypes = $pageIndexService->getAvailableStores();
+        // Since we now use a single unified store, we don't need the index type selection
+        // Just provide the clear existing option
+        $definition->addField(new BooleanField(
+            'clear_existing', 
+            t('Clear Existing Index'), 
+            t('Remove existing index data before building new index. Recommended for clean rebuild.')
+        ));
         
-        // Add compact checkboxes for page types
-        $definition->addField(new BooleanField('select_all_page_types', t('All Page Types'), ''));
-        
-        foreach ($pageTypes as $handle => $name) {
-            $definition->addField(new BooleanField("page_type_{$handle}", $name, ''));
-        }
-        
-        $definition->addField(new BooleanField('clear_existing', t('Clear Existing'), ''));
+        // Add page ID field for rebuilding specific pages or ranges
+        $definition->addField(new Field(
+            'page_ids', 
+            t('Page IDs (Optional)'), 
+            t('Leave empty to rebuild all pages, or specify: single page (e.g., "1234"), range (e.g., "1234-5678"), or comma-separated list (e.g., "1234,5678,9012")')
+        ));
         
         return $definition;
     }
 
     public function getTaskRunner(TaskInterface $task, InputInterface $input): TaskRunnerInterface
     {
-        // Get available page types to know what checkboxes to look for
-        $pageIndexService = new PageIndexService();
-        $pageTypes = $pageIndexService->getAvailableStores();
-        
-        $selectedStores = [];
-        
-        // Check if "Select All" is checked
-        $selectAll = false;
-        if ($input->hasField('select_all_page_types')) {
-            $selectAll = (bool) $input->getField('select_all_page_types')->getValue();
-        }
-        
-        if ($selectAll) {
-            // If "Select All" is checked, use empty array to indicate all stores
-            $selectedStores = [];
-        } else {
-            // Check individual page type checkboxes
-            foreach ($pageTypes as $handle => $name) {
-                $fieldName = "page_type_{$handle}";
-                if ($input->hasField($fieldName)) {
-                    $isSelected = (bool) $input->getField($fieldName)->getValue();
-                    if ($isSelected) {
-                        $selectedStores[] = $handle;
-                    }
-                }
-            }
-            
-            // If no individual page types are selected, default to all
-            if (empty($selectedStores)) {
-                $selectedStores = [];
-            }
-        }
+        // Since we use a single unified store, always use 'all_pages'
+        $selectedStores = ['all_pages'];
         
         // Parse clear existing flag from BooleanField
         $clearExisting = false; // default value
@@ -97,15 +69,29 @@ class BuildPageIndexController extends AbstractController
             $clearExisting = (bool) $input->getField('clear_existing')->getValue();
         }
         
-        // Create the command with proper parameter order (clearExisting first, selectedStores second)
-        $command = new BuildPageIndexCommand($clearExisting, $selectedStores);
+        // Parse page IDs field
+        $pageIds = null;
+        if ($input->hasField('page_ids')) {
+            $pageIdsValue = trim((string) $input->getField('page_ids')->getValue());
+            if (!empty($pageIdsValue)) {
+                $pageIds = $this->parsePageIds($pageIdsValue);
+            }
+        }
+        
+        // Create the command with proper parameter order (clearExisting first, selectedStores second, pageIds third)
+        $command = new BuildPageIndexCommand($clearExisting, $selectedStores, $pageIds);
         
         // Execute the batch preparation command to get the batch
         $handler = new BuildPageIndexCommandHandler();
         $batch = $handler($command);
         
-        // Build dynamic task title with selected page types
-        $taskTitle = $this->buildTaskTitle($selectedStores, $selectAll, $pageTypes);
+        // Dynamic task title based on whether specific pages are being rebuilt
+        if ($pageIds !== null && !empty($pageIds)) {
+            $pageCount = count($pageIds);
+            $taskTitle = "Building page index [{$pageCount} specific pages]";
+        } else {
+            $taskTitle = 'Building unified page index [All Pages]';
+        }
         
         return new BatchProcessTaskRunner(
             $task,
@@ -116,38 +102,44 @@ class BuildPageIndexController extends AbstractController
     }
 
     /**
-     * Build dynamic task title with selected page types
+     * Parse page IDs input into array of integers
+     * Supports: single ID (1234), ranges (1234-5678), comma-separated (1234,5678,9012)
      */
-    private function buildTaskTitle(array $selectedStores, bool $selectAll, array $pageTypes): string
+    private function parsePageIds(string $input): array
     {
-        $baseTitle = 'Building page index';
+        $pageIds = [];
         
-        if ($selectAll || empty($selectedStores)) {
-            // All page types selected
-            return $baseTitle . ' [All Page Types]';
-        }
+        // Split by commas first to handle multiple entries
+        $entries = array_map('trim', explode(',', $input));
         
-        // Build list of selected page type names
-        $selectedNames = [];
-        foreach ($selectedStores as $handle) {
-            if (isset($pageTypes[$handle])) {
-                $selectedNames[] = $pageTypes[$handle];
+        foreach ($entries as $entry) {
+            if (empty($entry)) {
+                continue;
+            }
+            
+            // Check if it's a range (contains hyphen)
+            if (strpos($entry, '-') !== false) {
+                $rangeParts = explode('-', $entry, 2);
+                if (count($rangeParts) === 2) {
+                    $start = (int) trim($rangeParts[0]);
+                    $end = (int) trim($rangeParts[1]);
+                    
+                    if ($start > 0 && $end > 0 && $start <= $end) {
+                        for ($i = $start; $i <= $end; $i++) {
+                            $pageIds[] = $i;
+                        }
+                    }
+                }
+            } else {
+                // Single page ID
+                $pageId = (int) $entry;
+                if ($pageId > 0) {
+                    $pageIds[] = $pageId;
+                }
             }
         }
         
-        if (empty($selectedNames)) {
-            return $baseTitle . ' [No Page Types Selected]';
-        }
-        
-        // Limit the display to avoid overly long titles
-        if (count($selectedNames) > 3) {
-            $displayNames = array_slice($selectedNames, 0, 3);
-            $remaining = count($selectedNames) - 3;
-            $typesList = implode(', ', $displayNames) . " + {$remaining} more";
-        } else {
-            $typesList = implode(', ', $selectedNames);
-        }
-        
-        return $baseTitle . " [{$typesList}]";
+        // Remove duplicates and return sorted
+        return array_unique($pageIds);
     }
 }

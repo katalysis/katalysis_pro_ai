@@ -5,7 +5,7 @@ namespace KatalysisProAi;
 use Concrete\Core\Support\Facade\Config;
 use Doctrine\ORM\EntityManagerInterface;
 use NeuronAI\SystemPrompt;
-use NeuronAI\Chat\History\FileChatHistory;
+use KatalysisProAi\DatabaseChatHistory;
 
 use NeuronAI\Providers\AIProviderInterface;
 use NeuronAI\Providers\OpenAI\OpenAI;
@@ -13,21 +13,22 @@ use NeuronAI\RAG\Embeddings\EmbeddingsProviderInterface;
 use NeuronAI\RAG\Embeddings\OpenAIEmbeddingsProvider;
 use NeuronAI\RAG\RAG;
 use NeuronAI\RAG\VectorStore\VectorStoreInterface;
-use NeuronAI\RAG\DataLoader\StringDataLoader;
-use NeuronAI\RAG\VectorStore\FileVectorStore;
+use KatalysisProAi\TypesenseVectorStoreFactory;
+use KatalysisProAi\PageIndexService;
+use KatalysisProAi\ActionService;
 
 class RagAgent extends RAG
 {
     protected $app;
+    private ?DatabaseChatHistory $chatHistoryInstance = null;
 
-    public function setApp($app)
+    public function setApp($app): void
     {
         $this->app = $app;
     }
     
     protected function provider(): AIProviderInterface
     {
-        // return an AI provider (Anthropic, OpenAI, Ollama, Gemini, etc.)
         return new OpenAI(
             Config::get('katalysis.ai.open_ai_key'),
             Config::get('katalysis.ai.open_ai_model')
@@ -44,20 +45,62 @@ class RagAgent extends RAG
     
     protected function vectorStore(): VectorStoreInterface
     {
-        return new FileVectorStore(
-            DIR_APPLICATION . '/files/neuron',
-            15,  // Increased for better document diversity
-            'pages'  // Use 'pages' as filename to create pages.store
-        );
+        // Detect actual embedding dimensions dynamically
+        $vectorDimensions = $this->detectEmbeddingDimensions();
+        return TypesenseVectorStoreFactory::create('pages', 15, $vectorDimensions);
+    }
+    
+    /**
+     * Detect the actual embedding dimensions from OpenAI
+     */
+    private function detectEmbeddingDimensions(): int
+    {
+        try {
+            $embeddingProvider = $this->embeddings();
+            $testEmbedding = $embeddingProvider->embedText("Test text for dimension detection");
+            return count($testEmbedding);
+        } catch (\Exception $e) {
+            error_log("Warning: Could not detect embedding dimensions, using default 1536: " . $e->getMessage());
+            return 1536; // Fallback to default
+        }
+    }
+    
+    /**
+     * Override the parent retrieveDocuments method to search across all page collections
+     */
+    public function retrieveDocuments($message): array
+    {
+        try {
+            // Use PageIndexService for multi-collection search
+            $pageIndexService = new PageIndexService();
+            $query = is_object($message) ? $message->getContent() : (string)$message;
+            return $pageIndexService->getRelevantDocuments($query, 15);
+        } catch (\Exception $e) {
+            // Fallback to parent method if PageIndexService fails
+            return parent::retrieveDocuments($message);
+        }
     }
 
     protected function chatHistory(): \NeuronAI\Chat\History\AbstractChatHistory
     {
-        return new FileChatHistory(
-            DIR_APPLICATION . '/files/neuron',
-            '1', // The key allow to store different files to separate conversations
-            2000  // Reduced for better performance
-        );
+        // Use singleton pattern to ensure chat ID persistence
+        if ($this->chatHistoryInstance === null) {
+            $this->chatHistoryInstance = new DatabaseChatHistory(2000);
+        }
+        return $this->chatHistoryInstance;
+    }
+
+    /**
+     * Set the chat ID for the current conversation
+     * This allows the RAG agent to persist chat history to the database
+     */
+    public function setChatId(?int $chatId): self
+    {
+        $chatHistory = $this->chatHistory();
+        if ($chatHistory instanceof DatabaseChatHistory && $chatId) {
+            $chatHistory->setChatId($chatId);
+        }
+        return $this;
     }
 
     public function instructions(): string
@@ -74,8 +117,6 @@ class RagAgent extends RAG
                 $actionsPrompt = "No action buttons are currently available.";
             }
         }
-
-
 
         // Build the instructions as a string instead of SystemPrompt object
         $instructions = [];
@@ -108,13 +149,17 @@ class RagAgent extends RAG
     {
         $baseInstructions = Config::get('katalysis.aichatbot.instructions');
         
-        // Replace placeholders with actual values
-        $instructions = str_replace('{page_type}', $pageType ?? 'unknown', $baseInstructions);
-        $instructions = str_replace('{page_title}', $pageTitle ?? 'this page', $instructions);
-        $instructions = str_replace('{page_url}', $pageUrl ?? 'current page', $instructions);
+        // Add context to instructions
+        $contextInstructions = $baseInstructions . "\n\n";
+        $contextInstructions .= "CURRENT PAGE CONTEXT:\n";
+        if ($pageType) $contextInstructions .= "- Page Type: {$pageType}\n";
+        if ($pageTitle) $contextInstructions .= "- Page Title: {$pageTitle}\n";
+        if ($pageUrl) $contextInstructions .= "- Page URL: {$pageUrl}\n";
+        $contextInstructions .= "\nUse this context to provide relevant, contextual responses about the current page the user is viewing.";
         
-        // For now, just use the regular answer method since we can't create a new RAG instance
-        // The page context will be handled through the existing instructions
-        return $this->answer($message);
+        // Call the parent answer method
+        $response = $this->answer($message);
+        
+        return $response;
     }
-}   
+}

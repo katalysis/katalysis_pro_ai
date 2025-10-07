@@ -1,74 +1,171 @@
-# Katalysis Pro AI - Application Architecture & Features
+# Katalysis Pro AI - Application Architecture
 
-This document provides comprehensive technical documentation for AI coding agents working with the Katalysis Pro AI application, building on the foundation established in CLAUDE.md.
+This document provides comprehensive technical documentation for the Katalysis Pro AI application architecture, focusing on the current Enhanced AI Search Block implementation.
 
 ## 🏗️ Application Overview
 
-Katalysis Pro AI is a sophisticated Concrete CMS package that provides AI-powered search and chatbot functionality for legal services websites. The application integrates multiple AI systems including vector search, RAG (Retrieval Augmented Generation), and intelligent form processing.
+Katalysis Pro AI is a sophisticated Concrete CMS package that provides AI-powered search and chatbot functionality for legal services websites. The application centers around five main components:
 
-## 🧠 AI System Architecture
+1. **Enhanced AI Search Block** - Frontend search interface with comprehensive AI functionality
+2. **Dashboard Search Settings** - Backend configuration and structure management 
+3. **Chatbot System** - Interactive AI-powered chat interface
+4. **Dashboard Chat Bot Settings** - Backend configuration for chatbot
+5. **General Settings** - Backend configuration for Typesense and AI integrations
 
-### Core AI Components
 
-#### 1. **AI Search System** (Primary Feature - Latest Implementation)
+## 🔍 Enhanced AI Search Block (Frontend Component)
+
+### Architecture Overview
+**Location**: `blocks/katalysis_ai_enhanced_search/`
+**Controller**: `blocks/katalysis_ai_enhanced_search/controller.php`
+**View**: `blocks/katalysis_ai_enhanced_search/view.php`
+
+The Enhanced AI Search Block is a self-contained Concrete CMS block that provides comprehensive AI-powered search functionality. All search logic, AI response generation, specialist matching, and content retrieval is handled within the block controller.
+
+### Core Block Methods
+
+#### AI Response Generation
+- `generate_ai_response()` - Main AJAX endpoint for AI response generation
+- `generateAIResponse()` - Core AI response processing with RagAgent integration
+- `buildAIResponsePrompt()` - Creates comprehensive prompts with search context
+- `parseAIResponse()` - Handles JSON parsing and structured response formatting
+
+#### Search & Content Retrieval  
+- `perform_search()` - Main AJAX endpoint for search operations
+- `performSearch()` - Orchestrates multi-phase search process
+- `getSupportingContent()` - Retrieves specialists, reviews, and places
+- `getTargetedSpecialists()` - Priority-based specialist matching with fallbacks
+
+#### AI Intent Analysis
+- `performQueryCategorization()` - Multi-dimensional intent analysis using GPT-4o-mini
+- `isConveyancingQuery()` / `isInjuryOrAccidentQuery()` - Query type detection
+- `getDetectedCategoryForMatrix()` - Intent-based content categorization
+
+### Block Architecture Benefits
+- **Self-Contained**: All functionality encapsulated within the block
+- **Reusable**: Can be added to any page via Concrete CMS block system
+- **Configurable**: Uses dashboard settings for response structure and AI configuration
+- **Maintainable**: Single point of logic for easier debugging and updates
+
+## 🔧 Dashboard Search Settings (Configuration Component)
+
+### Architecture Overview
 **Location**: `controllers/single_page/dashboard/katalysis_pro_ai/search_settings.php`
-- **Purpose**: AI-powered search with comprehensive service explanations
-- **Architecture**: Pure AI-powered approach (manual methods eliminated)
-- **AI Provider**: RagAgent with OpenAI integration (gpt-4o-mini model)
-- **Key Features**:
-  - `buildExpandedServiceQuery()` method for 5-point comprehensive responses
-  - `evaluateSpecialistsWithAI()` for intelligent specialist matching
-  - `evaluateAllPlacesWithAI()` for location-aware recommendations
-  - Vector-powered review matching with semantic similarity
-  - Professional formatting with complete contact information
-- **Recent Improvements**: 500+ lines of manual code removed, 30% smaller codebase
+**Purpose**: Backend administrative interface for configuring AI search behavior and response structure
 
-#### 2. **RagAgent** (Foundation)
-**Location**: `src/RagAgent.php` (inherited from katalysis_neuron_ai)
-- **Purpose**: Retrieval Augmented Generation for contextual AI responses
-- **Capabilities**:
-  - Document retrieval with vector similarity search
-  - Context-aware response generation
-  - Multi-provider AI support (OpenAI, Anthropic, Ollama)
+### Core Dashboard Features
 
-#### 3. **Vector Search Engine**
-**Location**: `src/KatalysisProIndexService.php`
-- **Purpose**: AI-powered semantic search for people, places, and reviews
-- **Technology**: OpenAI text-embedding-3-small model
-- **Features**:
-  - Specialist matching with expertise analysis
-  - Location-aware place recommendations  
-  - Review relevance scoring
+#### Response Structure Management
+- **Section Configuration**: Define AI response sections (Direct Answer, Our Capabilities, etc.)
+- **Sentence Count Control**: Specify exact sentence counts per section 
+- **Section Ordering**: Manage display order and section priorities
+- **Guidelines Management**: Configure AI response formatting rules
 
-### AI-Powered Search Flow
+#### AI Configuration
+- **Provider Settings**: OpenAI API keys, model selection (gpt-4o-mini)
+- **Search Parameters**: Result limits, response length settings
+- **Debug Controls**: Enable/disable debug panel and logging
 
-```mermaid
-graph TD
-    A[User Query] --> B[AI Search Controller]
-    B --> C[buildExpandedServiceQuery]
-    C --> D[RagAgent Response Generation]
-    B --> E[AI Specialist Evaluation]
-    B --> F[AI Place Evaluation]  
-    B --> G[Vector Review Search]
-    D --> H[Comprehensive AI Response]
-    E --> I[Relevant Specialists]
-    F --> J[Location Recommendations]
-    G --> K[Matched Reviews]
-    H --> L[Combined Results]
-    I --> L
-    J --> L
-    K --> L
-```
+#### Administrative Interface
+- **Section Editor**: Add, edit, disable response sections
+- **Settings Forms**: Configure search behavior and AI parameters
+- **Status Monitoring**: View system status and configuration validation
 
-## 🔍 AI Search System (Latest Implementation)
+### Integration with Enhanced AI Search Block
+The dashboard settings provide configuration that the Enhanced AI Search Block uses for:
+- AI response structure via `getResponseFormatInstructions()`
+- Search behavior parameters
+- Debug panel visibility controls
+- Response formatting guidelines
 
-### Enhanced AI Response Generation
-The search system now provides comprehensive service explanations instead of basic query answers using a pure AI-powered architecture that eliminated all manual scoring methods.
+## 🤖 Chatbot System (Frontend Component)
 
-#### Key Controller: `search_settings.php`
-**Location**: `controllers/single_page/dashboard/katalysis_pro_ai/search_settings.php`
-**Main Method**: `ask_ai()` - Handles all AI search processing
-**Architecture**: Pure AI-powered approach (500+ lines of manual methods removed)
+### Architecture Overview
+**Location**: `blocks/katalysis_chatbot/`
+**Purpose**: Interactive AI-powered chat interface for website visitors
+
+### Core Chatbot Features
+
+#### Multi-Provider AI Support
+- **OpenAI Integration**: GPT-4o-mini for conversational AI
+- **Anthropic Support**: Alternative AI provider option
+- **Ollama Integration**: Local AI model support
+- **RagAgent Integration**: Enhanced responses with document retrieval
+
+#### Interactive Form System
+**Four Form Types Supported**:
+1. **Basic Actions**: Simple button interactions following AI instructions
+2. **Simple Forms**: All fields displayed simultaneously (traditional web form experience)
+3. **Static Forms**: Step-by-step multi-step forms with navigation
+4. **Dynamic Forms**: AI-controlled conditional progression with smart logic
+
+#### Frontend Features
+- **Real-time Interface**: Interactive chat with immediate responses
+- **Conversation History**: Client-side chat persistence
+- **Welcome Messages**: AI-generated contextual greetings
+- **Progressive Enhancement**: Works across all device types and browsers
+
+### Chatbot Architecture Benefits
+- **Multi-Modal Interaction**: Supports both conversational AI and structured forms
+- **Contextual Responses**: AI responses enhanced with website content via RAG
+- **Progressive Enhancement**: Works across all device types and browsers
+
+## 🔧 Dashboard Chat Bot Settings (Configuration Component)
+
+### Architecture Overview
+**Location**: `controllers/single_page/dashboard/katalysis_pro_ai/chat_bot_settings.php`
+**Purpose**: Backend administrative interface for configuring chatbot behavior and managing conversations
+
+### Core Dashboard Features
+
+#### Chatbot Configuration
+- **AI Provider Settings**: Configure OpenAI, Anthropic, or Ollama providers
+- **Conversation Management**: View and manage chat histories
+- **Welcome Message Configuration**: Set up AI-generated greetings
+- **Form Action Management**: Configure interactive form behaviors
+
+#### Administrative Interface
+- **Chat History Viewer**: Review all conversation interactions
+- **Analytics Dashboard**: Monitor chatbot usage and performance
+- **Action Configuration**: Set up and manage chatbot actions and forms
+- **Provider Switching**: Enable/disable different AI providers
+
+### Integration with Chatbot System
+The dashboard settings provide configuration that the Chatbot System uses for:
+- AI provider selection and API keys
+- Conversation storage and retrieval settings
+- Welcome message templates and timing
+- Form action configurations and workflows
+
+## ⚙️ General Settings (System Configuration Component)
+
+### Architecture Overview
+**Location**: Various dashboard configuration interfaces
+**Purpose**: System-wide configuration for AI integrations and core functionality
+
+### Core Configuration Areas
+
+#### AI Provider Configuration
+- **OpenAI Settings**: API keys, model selection (gpt-4o-mini, text-embedding-3-small)
+- **Anthropic Configuration**: Claude model settings and API keys
+- **Ollama Integration**: Local AI model configuration and endpoints
+
+#### Vector Search Configuration
+- **Typesense Settings**: Search server configuration and indexing parameters
+- **Vector Store Management**: Embedding storage and retrieval settings
+- **Index Building**: Batch processing configuration for large sites
+
+#### System Integration Settings
+- **RAG Configuration**: Document retrieval and context settings
+- **Performance Settings**: Caching, batch sizes, and timeout configurations
+- **Debug Settings**: Global debug mode and logging configuration
+
+### Integration with All Components
+General settings provide system-wide configuration that all components use for:
+- AI provider access and authentication
+- Vector search capabilities and performance
+- Debug infrastructure and logging levels
+- System performance and optimization settings
 
 #### Expanded Query Template Implementation
 ```php
@@ -88,101 +185,32 @@ Query: {$query}";
 }
 ```
 
-### AI-Powered Specialist Evaluation (Pure AI Architecture)
-**Method**: `evaluateSpecialistsWithAI()`
-- **Approach**: AI analyzes all available specialists against user queries
-- **Data Source**: `KatalysisPeople` database table with complete specialist profiles
-- **Evaluation Criteria**: Expertise, job titles, experience, query relevance
-- **AI Processing**: OpenAI analyzes each specialist's qualifications contextually
-- **Output**: Top 3 most relevant specialists with AI-generated match reasoning
-- **Enhancement**: Includes complete office information, contact details, and distance context
-- **Integration**: Seamlessly integrated into search results with professional formatting
 
-### AI-Enhanced Place Recommendations (Location Intelligence)
-**Method**: `evaluateAllPlacesWithAI()`
-- **Approach**: AI evaluates office locations for query relevance
-- **Data Source**: `KatalysisPlaces` database table with office locations
-- **Context Analysis**: Geographic relevance, service areas, user intent, accessibility
-- **AI Processing**: Intelligent location matching based on query context
-- **Output**: AI-provided distance information and match explanations
-- **Integration**: Real office data enhanced with AI-generated travel context
-- **Features**: Complete address information, contact details, and contextual recommendations
 
-### Vector-Powered Review Matching (Semantic Search)
-**Method**: Integrated vector search for `KatalysisReviews`
-- **Technology**: OpenAI text-embedding-3-small for semantic similarity
-- **Approach**: Vector similarity search for relevant client testimonials
-- **Processing**: AI evaluates review content against user query context
-- **Output**: Most relevant client reviews with ratings and testimonial content
-- **Enhancement**: Professional display with star ratings and review metadata
-- **Integration**: Contextually relevant testimonials that support query responses
+### Multi-Dimensional AI Intent Analysis
+The Enhanced AI Search Block provides sophisticated query understanding through single AI API calls with comprehensive context awareness.
 
-### Complete Search Flow (Latest Architecture)
-1. **Query Processing**: User input sanitization and validation
-2. **AI Response Generation**: `buildExpandedServiceQuery()` creates comprehensive prompt
-3. **RAG Integration**: RagAgent processes query with document retrieval context
-4. **Specialist Analysis**: AI evaluates all specialists for relevance
-5. **Location Evaluation**: AI analyzes office locations for geographic relevance  
-6. **Review Matching**: Vector search identifies relevant client testimonials
-7. **Response Assembly**: Combines AI response with specialist, place, and review data
-8. **Professional Display**: Formatted results with complete contact information
+#### Intent Detection System
+**Multi-Dimensional Analysis** in single GPT-4o-mini API call:
+- **Service Area**: Maps queries to legal specialisms (Conveyancing, Road Accident, etc.)
+- **Location**: Identifies UK cities/towns for office distance calculations
+- **Person**: Detects specific staff member mentions with fuzzy matching
+- **Intent Type**: Classifies as service/location/person/general
+- **Urgency**: Assesses query urgency level for prioritization
 
-## 🤖 Chatbot System Architecture
+#### Smart Content Delivery Matrix
+**Intent-Based Content Selection**:
+- **Service Intent**: Shows relevant specialists + reviews + legal content
+- **Location Intent**: Shows nearest offices + distance calculations + local specialists
+- **Person Intent**: Shows specific person info + general fallback content
+- **General Intent**: Shows Our Services + About Us curated pages
 
-### Chat Agent Types
-1. **AiAgent**: Basic conversational AI for general inquiries
-2. **RagAgent**: Advanced agent with document retrieval capabilities  
-3. **Search Integration**: Specialized search-focused AI responses
-
-### Interactive Form System
-The chatbot supports three sophisticated form types:
-
-#### Form Types Overview
-```javascript
-// Form type configuration
-const formTypes = {
-    "form_static": "Step-by-step with conditional logic",
-    "form_dynamic": "AI-controlled conditional progression", 
-    "simple_form": "All fields displayed simultaneously"
-};
-```
-
-#### Simple Form Implementation (Latest)
-**Purpose**: Traditional web form experience within chat interface
-**Features**:
-- All fields render simultaneously (no step progression)
-- Client-side validation with visual error indicators
-- AI-generated confirmation messages
-- Responsive design with gradient styling
-- Chat history integration for dashboard viewing
-
-**Backend Processing**:
-```php
-// Simple form submission in ChatBotSettings controller
-public function submit_simple_form() {
-    // Validate and process form data
-    // Generate AI confirmation response
-    // Update chat history with form completion
-    // Return JSON response for frontend
-}
-```
-
-**Frontend Rendering**:
-```javascript
-// Simple form rendering in chatbot view
-function renderSimpleForm(actionData) {
-    // Generate all form fields at once
-    // Apply responsive styling
-    // Setup client-side validation
-    // Handle form submission via AJAX
-}
-```
-
-### Welcome Message System
-**Feature**: AI-generated contextual welcome messages
-**Generation**: Time-aware personalized greetings
-**Storage**: Database persistence with chat history integration
-**Display**: Special styling in dashboard chat views
+#### Production-Ready Debug Infrastructure
+**Conditional Debug System**:
+- Backend: `Config::get('katalysis.debug.enabled', false)` 
+- Frontend: `DEBUG_MODE = false` with `debugLog()` helper
+- Three-column debug visualization with AI analysis breakdown
+- Zero performance overhead when debug mode disabled
 
 ## 🗄️ Data Architecture & Storage
 
@@ -242,11 +270,11 @@ $priorityMapping = [
 
 ## 🌐 Frontend Integration
 
-### Block Architecture (Latest Implementation)
-**Primary Block**: `katalysis_ai_search`
-**Location**: `blocks/katalysis_ai_search/view.php` (665 lines of optimized code)
+### Enhanced AI Search Block Frontend
+**Primary Block**: `katalysis_ai_enhanced_search`
+**Location**: `blocks/katalysis_ai_enhanced_search/view.php`
 **Features**:
-- **Real-time AI Search Interface**: Responsive search form with autocomplete
+- **Real-time AI Search Interface**: Responsive search form with progressive enhancement
 - **Comprehensive Results Display**: AI responses, specialists, places, and reviews
 - **Specialist Integration**: Complete specialist profiles with office information and contact details
 - **Location Intelligence**: AI-generated distance context and travel information
@@ -254,20 +282,20 @@ $priorityMapping = [
 - **Professional Styling**: Bootstrap 5 framework with gradient designs and accessibility features
 - **Mobile-Responsive Design**: Progressive enhancement for all device types
 - **Interactive Elements**: Loading states, error handling, and user feedback
-- **AJAX Integration**: Seamless communication with search controller endpoints
+- **Debug Panel**: Conditional three-column AI analysis visualization
 
-### AJAX Communication  
-**Endpoints**: Environment-agnostic URL generation
+### Block-Based AJAX Communication  
+**Block Endpoints**: All handled within the block controller
 ```php
-// Proper URL generation for all environments
-\Concrete\Core\Support\Facade\Url::to('/dashboard/katalysis_pro_ai/search_settings/ask_ai')
+// Block-based URL generation
+$view->action('perform_search', $token, $blockID)
+$view->action('generate_ai_response', $token, $blockID)
 ```
 
-**Key Endpoints**:
-- `/ask_ai`: Main AI processing
-- `/log_chat`: Chat history management
-- `/execute_action`: Form and action processing
-- `/submit_simple_form`: Simple form handling
+**Key Block Methods**:
+- `perform_search`: Main search processing with multi-phase results
+- `generate_ai_response`: AI response generation with structured output
+- `get_supporting_content`: Async loading of specialists, reviews, places
 
 ### Responsive Design
 - Bootstrap 5 framework integration
@@ -316,42 +344,65 @@ $aiSettings = [
 
 ## 📊 Recent Major Improvements
 
-### Code Cleanup & Optimization (Latest)
-- **Removed Redundant Code**: ~500+ lines of manual scoring methods eliminated
-  - Deleted: `calculateSpecialistRelevance()`, `calculateReviewRelevance()`, `extractQueryKeywords()`, `calculateDistance()`, `extractLocationKeywords()`
-  - Reason: Pure AI-powered approach is more accurate and maintainable
-- **Debug Logging Reduction**: 40% reduction in logging overhead (80+ → 48 statements)
-- **File Size Optimization**: 30% smaller codebase (1,600+ → 1,132 lines)
-- **Architecture Purification**: Pure AI-powered approach throughout
-- **Redundant File Removal**: Eliminated `build_vectors.php` and `chat_bot_settings.php`
+### Enhanced AI Search with Intent Analysis (Latest)
+- **Multi-Dimensional Intent Analysis**: Single GPT-4o-mini API call for comprehensive query understanding
+  - Service area detection with specialism mapping
+  - Location recognition with distance calculations
+  - Person detection with fuzzy name matching
+  - Intent classification: service/location/person/general
+- **Smart Content Delivery**: Intent-based content matrix with dedicated sections
+  - Our Services section for service-related fallback pages
+  - About Us section for person/general query fallbacks
+  - Priority-based specialist selection with sophisticated fallback logic
+  - Related specialism mapping for better context matching
+- **Production-Ready Debug Infrastructure**: Conditional logging system
+  - Backend: `Config::get('katalysis.debug.enabled', false)` for clean production logs
+  - Frontend: `DEBUG_MODE` constant with `debugLog()` helper function
+  - Three-column debug visualization with expandable sections
+  - Zero performance overhead when debug mode disabled
 
-### AI-Enhanced Search Responses (Latest Implementation)
-- **Comprehensive Service Explanations**: 5-point structured response template via `buildExpandedServiceQuery()`
-  1. **Direct Answer**: Addresses the specific query
-  2. **Related Services**: Details all relevant legal services and specializations
-  3. **Our Capabilities**: Explains firm's experience and qualifications
-  4. **Practical Guidance**: Provides actionable next steps and considerations
-  5. **Why Choose Us**: Highlights distinctive expertise and approach
-- **Professional Tone**: Accessible yet authoritative communication
-- **Service Discovery**: Highlights related services users might not consider
-- **Competitive Advantage**: Showcases firm's unique expertise and approach
+### Code Optimization & Architecture Cleanup (Completed)
+- **Eliminated Redundant Code**: ~500+ lines of manual scoring methods removed
+  - Maintained essential `recognizeLocationWithAI()` for distance calculations
+  - Removed duplicate validation logic and excessive temporary variables
+- **Debug Logging Optimization**: Conditional logging implementation (25+ statements made conditional)
+- **File Size Reduction**: 30% smaller codebase with improved maintainability
+- **Pure AI-Powered Architecture**: Eliminated manual scoring in favor of intelligent AI analysis
+- **Production Deployment Ready**: Clean logging and optimized performance
 
-### Enhanced AI Integration (Latest Architecture)
-- **AI Specialist Evaluation**: `evaluateSpecialistsWithAI()` method for intelligent specialist matching
-  - AI analyzes expertise, job titles, experience against user queries
-  - Returns top 3 specialists with AI-generated match reasoning
-  - Includes office information and distance context
-- **AI Place Recommendations**: `evaluateAllPlacesWithAI()` method for location intelligence
-  - AI evaluates office locations for query relevance
-  - Provides geographic relevance and service area context
-  - Integrates real office data with AI-generated explanations
-- **Smart Review Matching**: AI-powered review relevance scoring
-  - Vector similarity search for content matching
-  - Contextual relevance evaluation
+### Smart Specialist & Content Matching (Current Implementation)
+- **Priority-Based Specialist Selection**: Four-tier intelligent matching system
+  1. **Person Search**: Direct person name queries (intent: person)
+  2. **Specialism Filter**: Service area matching (intent: service)
+  3. **Location-Based**: Geographic specialist selection (intent: location)
+  4. **Smart Fallback**: Senior specialists with related specialism mapping
+- **Related Specialism Mapping**: Context-aware fallback logic
+  - "Road Accident" → Personal Injury specialists when no direct matches
+  - Service area relationships for better specialist recommendations
+  - Prevents irrelevant specialist matches through intelligent mapping
+- **Comprehensive Debug Transparency**: Real-time visibility into selection logic
+  - Priority level used, selection method, fallback status
+  - Complete specialist availability and matching process
+  - Performance metrics and detailed reasoning
+
+### AI-Powered Distance & Location Intelligence (Advanced Features)
+- **Location Recognition**: `recognizeLocationWithAI()` for comprehensive location analysis
+  - UK location detection with coordinate lookup
+  - Distance calculations to all office locations
+  - Direct office matching vs. nearest office recommendations
+  - AI-generated distance context and travel information
+- **Smart Place Selection**: Intent-driven office visibility
+  - Pure service queries hide places section (no location context)
+  - Location queries show relevant offices with distances
+  - AI reasoning for place recommendations
+- **Fallback Pages System**: Curated content for general/person queries
+  - Smart categorization: Our Services vs. About Us pages
+  - Keyword-based page classification using title/handle analysis
+  - Prevents random content mixing through intelligent grouping
   - Professional presentation with ratings
 
 ### Frontend Block Enhancements (Latest Features)
-- **Real-time Search Interface**: `blocks/katalysis_ai_search/view.php` optimized
+- **Real-time Search Interface**: `blocks/katalysis_ai_enhanced_search/view.php` optimized
 - **Comprehensive Results Display**: Specialists, places, reviews, and AI responses
 - **Mobile-Responsive Design**: Bootstrap 5 with progressive enhancement
 - **Professional Styling**: Clean, accessible interface design

@@ -1,67 +1,99 @@
-# Katalysis AI Chat Bot Package - TODO List
+# Katalysis Pro AI - Development Priorities
 
-## ✅ **COMPLETED FEATURES**
+## 🎯 **CURRENT PRIORITIES (October 2025)**
 
-### Core Functionality
-- [x] AI chatbot block with RAG integration
-- [x] Dynamic welcome message generation
-- [x] Chat session management and persistence
-- [x] Cross-page chat session continuity
-- [x] Contact page configuration via dashboard settings
-- [x] Chat logging to database with complete history
-- [x] Dashboard interface for chat management
-- [x] Chat detail view with complete conversation history
-- [x] Bulk delete functionality for chat records
-- [x] User message count tracking for engagement metrics
+### 1. **Action Integration Framework** 🔴 **HIGH PRIORITY**
+- [ ] **Create unified action system** that works across both Search and Chat blocks
+- [ ] **Implement action toggle switches** in block settings and in actions dashboard
+  - [ ] Enable/disable actions per block instance
+  - [ ] Support different action types (contact, booking, info display)
+  - [ ] Environment-specific action behavior (local vs. production)
+- [ ] **Standardize action data structure** between search and chat responses
+- [ ] **Test action integration** in both block types with various configurations
 
-### Styling & UI
-- [x] Custom CSS variables for chatbot theming
-- [x] Gradient background for AI messages
-- [x] Bootstrap class removal and custom styling
-- [x] Custom link button and action button styles
-- [x] Responsive design for mobile devices
-- [x] Icon spacing and visual improvements
-- [x] Dynamic AI header greeting
-- [x] Minimize/maximize functionality with chevron icon
-- [x] make colour settings available in block interface
+### 2. **Search Block Enhancement** 🔴 **HIGH PRIORITY**
+- [ ] **Move search display settings** from dashboard to search block interface
+  - [ ] Extract specialist selection toggles to block settings
+  - [ ] Move review display options to block settings
+  - [ ] Move places/location display settings to block settings
+  - [ ] Enable per-block customization of search results
+- [ ] **Create simple search mode** with minimal configuration
+- [ ] **Test search block variations** with different setting combinations
+  - [ ] Test with specialists only
+  - [ ] Test with reviews only
+  - [ ] Test with places only
+  - [ ] Test with all combinations enabled/disabled
 
-
-### Database & Data Management
-- [x] Chat entity with comprehensive fields
-- [x] Session ID tracking for conversation continuity
-- [x] First/last message preview fields (clean text)
-- [x] Complete chat history storage
-- [x] UTM tracking parameters
-- [x] User contact information fields
-- [x] Page context and location tracking
-
-### Code Quality
-- [x] Remove debugging console.log statements from frontend
+### 3. **Chat Block Architecture Refactoring** 🔴 **HIGH PRIORITY**
+- [ ] **Move chat logic to block controller** from dashboard settings
+  - [ ] Migrate chat processing from `chat_bot_settings.php` to block controller
+  - [ ] Move RAG agent integration to block level
+  - [ ] Implement chat session management in block controller
+- [ ] **Remove testing interface** from chat bot settings dashboard page
+  - [ ] Remove test chat interface from dashboard
+  - [ ] Clean up testing-related code in `chat_bot_settings.php`
+  - [ ] Focus dashboard on configuration and monitoring only
+- [ ] **Streamline dashboard functionality** to settings and analytics only
 
 ---
 
-## 🔧 **IMMEDIATE IMPROVEMENTS NEEDED**
 
-### Bug Fixes
-- [ ] Fix linter errors in chat_bot_settings.php (undefined methods)
-- [ ] Resolve potential database transaction conflicts
-- [ ] Ensure proper error handling for failed AI responses
-- [ ] Validate user input sanitization
-- [ ] Remove unnecessary fields in block interface
-- [X] Add welcome message to chat database
-- [ ] Make links open in same window
-- [ ] Check persistence of welcome maeesage across diefferent pages
+## 🚀 **SUGGESTED NEXT PHASE (Post-Priority Tasks)**
 
-### Code Quality
-- [ ] Add proper PHPDoc comments to all methods
-- [ ] Implement proper exception handling and logging
-- [ ] Add input validation and sanitization
-- [ ] Remove unused methods and clean up code
+### Code Quality & Architecture
+- [ ] **Comprehensive testing suite** for both search and chat blocks
+- [ ] **Performance optimization** for vector search operations
+- [ ] **Error handling standardization** across all components
+- [ ] **Documentation updates** reflecting new architecture
 
-### Performance
-- [ ] Optimize database queries for large chat volumes
-- [ ] Add caching for AI responses where appropriate
-- [ ] Optimize frontend JavaScript for better performance
+### Feature Extensions
+- [ ] **Advanced action types** (scheduling, document generation, multi-step workflows)
+- [ ] **Analytics integration** for action conversion tracking
+- [ ] **A/B testing framework** for different block configurations
+
+### Integration Opportunities
+- [ ] **Third-party calendar integration** for booking actions
+- [ ] **Email automation** for follow-up workflows
+
+---
+
+## � **IMPLEMENTATION NOTES**
+
+### Action Integration Framework
+- Design actions as reusable components that can be configured per block
+- Ensure actions maintain consistent data structure between search and chat
+- Consider action priority/ordering when multiple actions are available
+
+### Chat Block Refactoring
+- Move business logic out of dashboard controllers
+- Implement proper separation of concerns (settings vs. functionality)
+- Ensure chat session persistence works at block level
+- Clean up dashboard to focus on configuration and monitoring
+
+---
+
+## 🎯 **SUCCESS CRITERIA**
+
+### Action Integration
+- ✅ Actions work identically in both search and chat blocks
+- ✅ Block-level action configuration is intuitive and flexible
+- ✅ Action behavior is consistent across environments
+
+### Search Block Enhancement  
+- ✅ All search display options configurable per block
+- ✅ Simple search mode requires minimal setup
+- ✅ Different configurations produce expected results
+
+### Chat Block Refactoring
+- ✅ Chat functionality independent of dashboard settings page
+- ✅ Dashboard focused on configuration and analytics only
+- ✅ Block controller handles all chat operations cleanly
+
+---
+
+*Last Updated: October 7, 2025*  
+*Current Focus: Action Integration & Block Architecture*  
+*Status: Clean Architecture Established, Implementing Priority Features*
 
 ---
 
@@ -70,7 +102,6 @@
 ### User Experience
 - [ ] Add typing indicators during AI response generation
 - [ ] Add further options to actions - show place or people info from Katalysis Pro package
-- [ ] Add data capture options (maybe also in actions) - for fields for name, email, phone and message
 - [ ] Interactive forms and surveys
 - [ ] Make 'dumb' ask a question block templates to extend FAQ and Hero blocks
 - [ ] Make a search block to provide formated responses to search queries
@@ -84,7 +115,6 @@
 - [ ] Implement chat tagging/categorization
 
 ### AI Enhancements
-- [ ] Add conversation context memory
 - [ ] Implement user preference learning
 - [ ] Add support for multiple AI models
 - [ ] Implement conversation summarization
@@ -172,40 +202,8 @@
 
 ---
 
-## 🚀 **DEPLOYMENT & MAINTENANCE**
 
-### Deployment
-- [ ] Create deployment scripts
-- [ ] Implement database migration system
-- [ ] Add backup and restore functionality
-- [ ] Create monitoring and alerting
 
-### Maintenance
-- [ ] Regular security updates
-- [ ] Performance monitoring
-- [ ] Database optimization
-- [ ] Log rotation and management
-- [ ] Backup verification
-
----
-
-## 📈 **MONITORING & ANALYTICS**
-
-### System Monitoring
-- [ ] AI response time monitoring
-- [ ] Database performance metrics
-- [ ] Error rate tracking
-- [ ] User engagement metrics
-- [ ] System resource usage
-
-### Business Intelligence
-- [ ] Chat volume trends
-- [ ] User satisfaction metrics
-- [ ] Conversion rate analysis
-- [ ] Cost per interaction tracking
-- [ ] ROI measurement tools
-
----
 
 ## 🎯 **PRIORITY LEVELS**
 
