@@ -53,7 +53,8 @@ class Controller extends Package
 
     protected $blocks = array(
         'katalysis_ai_chat_bot',
-        'katalysis_ai_search'
+        'katalysis_ai_search',
+        'katalysis_ai_enhanced_search'
     );
 
     public function getPackageName()
@@ -124,9 +125,13 @@ class Controller extends Package
         
         // Install the search block
         BlockType::installBlockTypeFromPackage('katalysis_ai_search', $pkg);
+        
+        // Install the enhanced search block
+        BlockType::installBlockTypeFromPackage('katalysis_ai_enhanced_search', $pkg);
 
         $chatBotType = BlockType::getByHandle('katalysis_ai_chat_bot');
         $searchType = BlockType::getByHandle('katalysis_ai_search');
+        $enhancedSearchType = BlockType::getByHandle('katalysis_ai_enhanced_search');
         
         // Add the blocks to the Katalysis block set
         $blockSet = BlockTypeSet::getByHandle('katalysis');
@@ -136,6 +141,9 @@ class Controller extends Package
             }
             if ($searchType) {
                 $blockSet->addBlockType($searchType);
+            }
+            if ($enhancedSearchType) {
+                $blockSet->addBlockType($enhancedSearchType);
             }
         }
         

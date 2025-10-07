@@ -43,14 +43,15 @@
 ## 🔧 **IMMEDIATE IMPROVEMENTS NEEDED**
 
 ### Bug Fixes
+- [x] Fix RagAgent singleton pattern to prevent 500 Internal Server errors
+- [x] Add chatHistory field to Chat entity for Neuron AI compatibility
 - [ ] Fix linter errors in chat_bot_settings.php (undefined methods)
 - [ ] Resolve potential database transaction conflicts
 - [ ] Ensure proper error handling for failed AI responses
 - [ ] Validate user input sanitization
 - [ ] Remove unnecessary fields in block interface
-- [X] Add welcome message to chat database
 - [ ] Make links open in same window
-- [ ] Check persistence of welcome maeesage across diefferent pages
+- [ ] Check persistence of welcome message across different pages
 
 ### Code Quality
 - [ ] Add proper PHPDoc comments to all methods
@@ -68,12 +69,12 @@
 ## 🚀 **SHORT-TERM ENHANCEMENTS (1-2 weeks)**
 
 ### User Experience
+- [x] Enhanced AI Search Block created with consolidated search logic
 - [ ] Add typing indicators during AI response generation
 - [ ] Add further options to actions - show place or people info from Katalysis Pro package
 - [ ] Add data capture options (maybe also in actions) - for fields for name, email, phone and message
 - [ ] Interactive forms and surveys
 - [ ] Make 'dumb' ask a question block templates to extend FAQ and Hero blocks
-- [ ] Make a search block to provide formated responses to search queries
 
 
 ### Dashboard Improvements

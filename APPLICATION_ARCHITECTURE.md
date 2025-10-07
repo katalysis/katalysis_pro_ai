@@ -6,6 +6,57 @@ This document provides comprehensive technical documentation for AI coding agent
 
 Katalysis Pro AI is a sophisticated Concrete CMS package that provides AI-powered search and chatbot functionality for legal services websites. The application integrates multiple AI systems including vector search, RAG (Retrieval Augmented Generation), and intelligent form processing.
 
+## 🔄 Recent Architecture Refactoring
+
+### Enhanced AI Search Block
+**Location**: `blocks/katalysis_ai_enhanced_search/`
+- **Purpose**: Self-contained AI search block with consolidated logic
+- **Architecture Change**: Moved search logic from dashboard controller to block controller
+- **Benefits**: Better separation of concerns, reusable search functionality
+- **Features**:
+  - Integrated AI response generation
+  - Specialist, review, and location matching
+  - Configurable display options (inline/redirect)
+  - Debug mode for development
+  - AJAX-based search without page reload
+
+### RagAgent Singleton Pattern Fix
+**Location**: `src/RagAgent.php`
+- **Issue Fixed**: 500 Internal Server errors from multiple instances
+- **Solution**: Implemented proper singleton pattern
+- **Implementation**:
+  - Private constructor
+  - `getInstance()` method with unique key support
+  - Clone and unserialization prevention
+  - Prevents file/database conflicts
+
+### Database Chat History
+**Location**: `src/DatabaseChatHistory.php`
+- **Purpose**: Neuron AI compatible chat persistence
+- **Storage**: Database-based (Chat entity `chatHistory` field)
+- **Features**:
+  - Session-based chat lookup
+  - Message serialization/deserialization
+  - Message limit support (default 2000)
+  - Backward compatible with file-based history
+
+### Vector Store Factory Pattern
+**Location**: `src/TypesenseVectorStoreFactory.php`
+- **Purpose**: Extensible vector store creation
+- **Supports**: File-based and future Typesense integration
+- **Features**:
+  - Auto-detection of available backends
+  - Graceful fallback to file storage
+  - Configuration-based selection
+  - Custom Typesense store placeholder (`src/CustomTypesenseVectorStore.php`)
+
+### Chat Entity Enhancement
+**Location**: `src/Entity/Chat.php`
+- **New Field**: `chatHistory` (TEXT, nullable)
+- **Purpose**: Dual history storage for dashboard and AI compatibility
+- **Compatibility**: Maintains existing `completeChatHistory` field
+- **ORM**: Proper Doctrine annotations for automatic migration
+
 ## 🧠 AI System Architecture
 
 ### Core AI Components

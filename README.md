@@ -5,11 +5,13 @@ An advanced AI package for Concrete CMS that provides intelligent search functio
 ## Features
 
 ### 🔍 AI-Powered Search System (Primary Feature)
+- **Enhanced AI Search Block**: New self-contained block with consolidated search logic
 - **Comprehensive Service Explanations**: AI provides detailed 5-point structured responses covering direct answers, related services, capabilities, guidance, and competitive advantages
 - **Smart Specialist Matching**: AI evaluates all specialists against queries for optimal recommendations with office information
 - **Intelligent Place Recommendations**: AI-enhanced location suggestions with distance context and relevance matching  
 - **Semantic Review Search**: Vector-based review matching with relevance scoring
 - **Professional Tone**: Accessible yet authoritative communication optimized for legal services
+- **Dual Block Support**: Original search block plus new enhanced block with advanced features
 
 ### 🤖 Interactive Chatbot System
 - **Multiple AI Providers**: Support for OpenAI, Anthropic, and Ollama
@@ -23,9 +25,11 @@ An advanced AI package for Concrete CMS that provides intelligent search functio
 - **Page Index Service**: `PageIndexService.php` manages CMS content with OpenAI text-embedding-3-small
 - **Katalysis Pro Index Service**: `KatalysisProIndexService.php` handles specialized legal entity matching
 - **Enhanced Vector Store**: `KatalysisProVectorStore.php` with multi-file support and advanced search capabilities
+- **Factory Pattern**: `TypesenseVectorStoreFactory.php` enables future Typesense integration
 - **Batch Processing**: Fault-tolerant indexing with progress tracking for large sites
 - **Smart Content Filtering**: Automatically excludes system pages and insufficient content
 - **Metadata Preservation**: Stores page URLs, types, and entity relationships for accurate referencing
+- **Extensible Architecture**: Ready for Typesense vector database when needed
 
 
 ## Installation
@@ -60,7 +64,15 @@ An advanced AI package for Concrete CMS that provides intelligent search functio
 
 ## Recent Major Improvements
 
-### AI-First Architecture (Latest)
+### Architecture Refactoring (Latest)
+- **Enhanced AI Search Block**: New self-contained block with all search logic in controller
+- **RagAgent Singleton Pattern**: Fixed to prevent 500 Internal Server errors
+- **Database Chat History**: New `DatabaseChatHistory` class for Neuron AI compatibility
+- **Vector Store Factory**: Extensible factory pattern ready for Typesense integration
+- **Dual Chat History**: Added `chatHistory` field to Chat entity alongside existing field
+- **Code Consolidation**: Search logic moved from dashboard to block for better separation of concerns
+
+### AI-First Architecture
 - **Pure AI-Powered Approach**: Eliminated 500+ lines of manual scoring methods
 - **Comprehensive AI Responses**: 5-point structured response template for detailed service explanations
 - **Smart AI Evaluation**: AI analyzes specialists, places, and reviews for optimal matching

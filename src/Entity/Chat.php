@@ -173,6 +173,12 @@ class Chat
      * @ORM\Column(name="`welcomeMessage`", type="text", nullable=true)
      */
     protected $welcomeMessage = null;
+
+    /**
+     * @var string
+     * @ORM\Column(name="`chatHistory`", type="text", nullable=true)
+     */
+    protected $chatHistory = '';
     
     
     /**
@@ -641,6 +647,24 @@ class Chat
     public function setWelcomeMessage($welcomeMessage)
     {
         $this->welcomeMessage = $welcomeMessage;
+         return $this;
+    }
+
+    /**
+     * @return string
+     */
+    public function getChatHistory()
+    {
+        return $this->chatHistory;
+    }
+
+    /**
+     * @param string $chatHistory
+     * @return Chat
+     */
+    public function setChatHistory($chatHistory)
+    {
+        $this->chatHistory = $chatHistory;
          return $this;
     }
 
