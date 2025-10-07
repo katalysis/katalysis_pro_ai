@@ -17,7 +17,7 @@ class Controller extends Package
 {
     protected $pkgHandle = 'katalysis_pro_ai';
     protected $appVersionRequired = '9.3';
-    protected $pkgVersion = '0.1.25';
+    protected $pkgVersion = '0.1.30';
         protected $pkgAutoloaderRegistries = [
         'src' => 'KatalysisProAi'
     ];
@@ -48,12 +48,15 @@ class Controller extends Package
         '/dashboard/katalysis_pro_ai/search_settings' => array(
             'cName' => 'Search Settings'
         ),
+        '/dashboard/katalysis_pro_ai/settings' => array(
+            'cName' => 'Settings'
+        ),
 
     );
 
     protected $blocks = array(
         'katalysis_ai_chat_bot',
-        'katalysis_ai_search'
+        'katalysis_ai_enhanced_search'
     );
 
     public function getPackageName()
@@ -122,11 +125,11 @@ class Controller extends Package
         // Install the chatbot block
         BlockType::installBlockTypeFromPackage('katalysis_ai_chat_bot', $pkg);
         
-        // Install the search block
-        BlockType::installBlockTypeFromPackage('katalysis_ai_search', $pkg);
+        // Install the enhanced search block
+        BlockType::installBlockTypeFromPackage('katalysis_ai_enhanced_search', $pkg);
 
         $chatBotType = BlockType::getByHandle('katalysis_ai_chat_bot');
-        $searchType = BlockType::getByHandle('katalysis_ai_search');
+        $enhancedSearchType = BlockType::getByHandle('katalysis_ai_enhanced_search');
         
         // Add the blocks to the Katalysis block set
         $blockSet = BlockTypeSet::getByHandle('katalysis');
@@ -134,8 +137,8 @@ class Controller extends Package
             if ($chatBotType) {
                 $blockSet->addBlockType($chatBotType);
             }
-            if ($searchType) {
-                $blockSet->addBlockType($searchType);
+            if ($enhancedSearchType) {
+                $blockSet->addBlockType($enhancedSearchType);
             }
         }
         
@@ -144,9 +147,21 @@ class Controller extends Package
     public function upgrade()
     {
 		parent::upgrade();
+        $pkg = \Package::getByHandle($this->pkgHandle);
 
-        // Install new task definition
-        $this->installContentFile('build_page_index.xml');
+        BlockType::installBlockTypeFromPackage('katalysis_ai_enhanced_search', $pkg);
+
+        $enhancedSearchType = BlockType::getByHandle('katalysis_ai_enhanced_search');
+        
+        // Add the blocks to the Katalysis block set
+        $blockSet = BlockTypeSet::getByHandle('katalysis');
+        if ($blockSet) {
+            if ($enhancedSearchType) {
+                $blockSet->addBlockType($enhancedSearchType);
+            }
+        }
+
+        $this->installPages($pkg);
     }
 
 

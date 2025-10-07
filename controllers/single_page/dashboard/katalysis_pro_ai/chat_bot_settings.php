@@ -452,34 +452,24 @@ EXAMPLES OF INCORRECT RESPONSES:
     }
 
     /**
-     * Clear chat history files from the server
+     * Clear chat history from the database
      */
     public function clear_chat_history()
     {
         try {
-            $chatDirectory = DIR_APPLICATION . '/files/neuron';
+            $entityManager = $this->app->make('Doctrine\ORM\EntityManager');
+            
+            // Clear all chat records' chatHistory field (Neuron AI history)
+            // This clears only the Neuron AI conversation history while preserving dashboard chat history
+            $queryBuilder = $entityManager->createQueryBuilder();
+            $queryBuilder
+                ->update(\KatalysisProAi\Entity\Chat::class, 'c')
+                ->set('c.chatHistory', ':emptyHistory')
+                ->setParameter('emptyHistory', '')
+                ->getQuery()
+                ->execute();
 
-            // Clear RAG chat history (key '1')
-            $ragChatFile = $chatDirectory . '/1.json';
-            if (file_exists($ragChatFile)) {
-                unlink($ragChatFile);
-            }
-
-            // Clear basic AI chat history (key '2')
-            $basicChatFile = $chatDirectory . '/2.json';
-            if (file_exists($basicChatFile)) {
-                unlink($basicChatFile);
-            }
-
-            // Also clear any other chat files that might exist
-            $chatFiles = glob($chatDirectory . '/*.json');
-            foreach ($chatFiles as $file) {
-                if (is_file($file)) {
-                    unlink($file);
-                }
-            }
-
-            return new JsonResponse(['success' => true, 'message' => 'Chat history cleared successfully']);
+            return new JsonResponse(['success' => true, 'message' => 'Neuron AI chat history cleared successfully from database']);
 
         } catch (\Exception $e) {
             return new JsonResponse(['success' => false, 'error' => $e->getMessage()], 500);
@@ -642,6 +632,11 @@ EXAMPLES OF INCORRECT RESPONSES:
                 // RAG Mode: Use RagAgent with its instructions
                 $ragAgent = new RagAgent();
                 $ragAgent->setApp($this->app);
+                
+                // Set chat ID for database-based chat history if available
+                if ($chatId) {
+                    $ragAgent->setChatId($chatId);
+                }
 
                 try {
                     // Get the response using page context if available
@@ -878,7 +873,7 @@ Available documents (with titles and URLs):
                     foreach ($actionIds as $actionId) {
                         error_log('AI RESPONSE - Processing action ID: ' . $actionId);
                         $action = $actionService->getActionById($actionId);
-                        if ($action) {
+                        if ($action && $action->getEnabled()== true) {
                             error_log('AI RESPONSE - Found action: ' . $action->getName() . ' (ID: ' . $action->getId() . ')');
                             $actionData = [
                                 'id' => $action->getId(),

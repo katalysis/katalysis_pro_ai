@@ -2,17 +2,16 @@
 
 namespace KatalysisProAi;
 
-use Config;
 use \NeuronAI\Agent;
 use \NeuronAI\SystemPrompt;
-use \NeuronAI\Chat\History\FileChatHistory;
+use KatalysisProAi\DatabaseChatHistory;
 use \NeuronAI\Chat\Messages\UserMessage;
 use \NeuronAI\Providers\AIProviderInterface;
 use \NeuronAI\Providers\OpenAI\OpenAI;
 use \NeuronAI\Observability\AgentMonitoring;
 use Doctrine\ORM\EntityManagerInterface;
 use KatalysisProAi\ActionService;
-use Concrete\Core\Support\Facade\Config as ConcreteConfig;
+use Concrete\Core\Support\Facade\Config;
 
 
 class AiAgent extends Agent
@@ -25,8 +24,8 @@ class AiAgent extends Agent
         // Parent Agent class uses StaticConstructor trait, no constructor to call
         
         // Validate API configuration
-        $openaiKey = ConcreteConfig::get('katalysis.ai.open_ai_key');
-        $openaiModel = ConcreteConfig::get('katalysis.ai.open_ai_model');
+        $openaiKey = Config::get('katalysis.ai.open_ai_key');
+        $openaiModel = Config::get('katalysis.ai.open_ai_model');
         
         if (empty($openaiKey)) {
             error_log('AiAgent - OpenAI API key is not configured');
@@ -48,11 +47,8 @@ class AiAgent extends Agent
 
     protected function chatHistory(): \NeuronAI\Chat\History\AbstractChatHistory
     {
-        return new FileChatHistory(
-            directory: DIR_APPLICATION . '/files/neuron',
-            key: '2', // The key allow to store different files to separate conversations
-            contextWindow: 20000  // Reduced to prevent token limit issues
-        );
+        // Use database-based chat history instead of file-based
+        return new DatabaseChatHistory(2000);
     }
 
 

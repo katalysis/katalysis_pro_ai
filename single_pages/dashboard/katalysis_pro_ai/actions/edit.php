@@ -91,6 +91,25 @@ $createdByName = isset($createdByName) ? $createdByName : '';
                         ); ?>
 
                     </div>
+                    <div class="form-group">
+                        <div class="form-check">
+                            <?php echo $form->checkbox(
+                                "enabled",
+                                1,
+                                $enabled ?? false,
+                                [
+                                    "class" => "form-check-input"
+                                ]
+                            ); ?>
+                            <?php echo $form->label(
+                                "enabled",
+                                t("Enabled"),
+                                [
+                                    "class" => "form-check-label"
+                                ]
+                            ); ?>
+                        </div>
+                    </div>
                 </fieldset>
                 <div class="col-6">
                     <div class="form-group">

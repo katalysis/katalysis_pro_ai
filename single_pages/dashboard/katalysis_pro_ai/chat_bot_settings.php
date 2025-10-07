@@ -657,7 +657,7 @@ $ps = $app->make('helper/form/page_selector');
                         // Reset chat session ID
                         chatSessionId = null;
 
-                        // Clear server-side chat files
+                        // Clear server-side database chat history
                         $.ajax({
                             type: "POST",
                             url: "<?= $controller->action('clear_chat_history') ?>",
