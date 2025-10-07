@@ -16,9 +16,51 @@ use NeuronAI\RAG\VectorStore\VectorStoreInterface;
 use NeuronAI\RAG\DataLoader\StringDataLoader;
 use NeuronAI\RAG\VectorStore\FileVectorStore;
 
+/**
+ * RAG Agent with proper singleton pattern to prevent 500 Internal Server Errors
+ * Ensures only one instance exists per session to avoid file/database conflicts
+ */
 class RagAgent extends RAG
 {
     protected $app;
+    private static $instances = [];
+
+    /**
+     * Private constructor to prevent direct instantiation
+     */
+    private function __construct()
+    {
+        // Parent constructor will be called via getInstance
+    }
+
+    /**
+     * Get singleton instance of RagAgent
+     * 
+     * @param string $key Unique identifier for this RAG instance (default: 'default')
+     * @return self
+     */
+    public static function getInstance(string $key = 'default'): self
+    {
+        if (!isset(self::$instances[$key])) {
+            self::$instances[$key] = new self();
+        }
+        return self::$instances[$key];
+    }
+
+    /**
+     * Prevent cloning of the instance
+     */
+    private function __clone()
+    {
+    }
+
+    /**
+     * Prevent unserialization of the instance
+     */
+    public function __wakeup()
+    {
+        throw new \Exception("Cannot unserialize singleton");
+    }
 
     public function setApp($app)
     {
