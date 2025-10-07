@@ -127,11 +127,22 @@ class PageIndexService {
     }
 
     /**
-     * Get the file vector store instance
+     * Get the vector store instance
+     * Uses factory pattern to support both file-based and Typesense storage
      */
-    public function getVectorStore(int $topK = 4): FileVectorStore
+    public function getVectorStore(int $topK = 4): \NeuronAI\RAG\VectorStore\VectorStoreInterface
     {
+        // Use factory pattern if available and configured for Typesense
+        if (class_exists('\\KatalysisProAi\\TypesenseVectorStoreFactory')) {
+            try {
+                return TypesenseVectorStoreFactory::create('pages', $topK);
+            } catch (\Exception $e) {
+                // Fall back to file-based storage on error
+                error_log("Failed to create vector store via factory, falling back to file storage: " . $e->getMessage());
+            }
+        }
 
+        // Default file-based storage (backward compatibility)
         $storageDir = DIR_APPLICATION . '/files/neuron';
 
         if (!is_dir($storageDir)) {
