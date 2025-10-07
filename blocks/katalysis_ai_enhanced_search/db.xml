@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schema version="0.3">
+    <table name="btKatalysisAiEnhancedSearch">
+        <field name="bID" type="I">
+            <key/>
+            <unsigned/>
+        </field>
+        <field name="displayMode" type="C" size="20">
+            <default value="inline"/>
+        </field>
+        <field name="resultsPageId" type="I">
+            <default value="0"/>
+            <unsigned/>
+        </field>
+        <field name="searchPlaceholder" type="C" size="255">
+            <default value=""/>
+        </field>
+        <field name="searchButtonText" type="C" size="100">
+            <default value=""/>
+        </field>
+        <field name="maxResults" type="I">
+            <default value="5"/>
+            <unsigned/>
+        </field>
+        <field name="showSpecialists" type="I1">
+            <default value="1"/>
+        </field>
+        <field name="showReviews" type="I1">
+            <default value="1"/>
+        </field>
+        <field name="showPlaces" type="I1">
+            <default value="1"/>
+        </field>
+        <field name="enableDebug" type="I1">
+            <default value="0"/>
+        </field>
+    </table>
+</schema>
